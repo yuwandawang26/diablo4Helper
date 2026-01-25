@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+logs/*.png
+logs/*.log
+terminals/
+.cursor/
+.venv/
+venv/
+node_modules/
+*.json
+!requirements.txt
+!README.md

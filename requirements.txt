@@ -1,0 +1,11 @@
+opencv-python
+pyautogui
+easyocr
+keyboard
+pillow
+numpy
+torch
+torchvision
+pygetwindow
+matplotlib
+scikit-image
