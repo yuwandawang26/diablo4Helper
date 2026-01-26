@@ -8,5 +8,6 @@ terminals/
 venv/
 node_modules/
 *.json
+!assets/translations.json
 !requirements.txt
 !README.md
