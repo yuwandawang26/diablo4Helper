@@ -1,25 +1,49 @@
 import time
 import cv2
+import json
 import numpy as np
 import pyautogui
 from datetime import datetime
 from pathlib import Path
-from config import ASSETS_DIR, PLAYER_POS, MINIMAP_REGION, MATCH_THRESHOLD, CENTER_TOLERANCE, BOSS_DOOR_TOLERANCE, MAX_STEPS, DESIRED_EVENTS, LOGS_DIR, INVENTORY_REGION, EVENT_SCAN_ROI
+from config import ASSETS_DIR, PLAYER_POS, MINIMAP_REGION, MATCH_THRESHOLD, CENTER_TOLERANCE, BOSS_DOOR_TOLERANCE, MAX_STEPS, DESIRED_EVENTS_CN, DESIRED_EVENTS_EN, LOGS_DIR, INVENTORY_REGION, EVENT_SCAN_ROI, TRANSLATIONS_PATH
 from core.vision import VisionSystem
 from core.navigation import NavigationSystem
 from core.enums import GameState
 import keyboard as kb
 
 class CompassBot:
-    def __init__(self):
-        self.vision = VisionSystem()
-        self.nav = NavigationSystem()
+    def __init__(self, lang="cn"):
+        self.lang = lang
+        self.load_translations()
+        self.vision = VisionSystem(lang=lang, translations=self.translations)
+        self.nav = NavigationSystem(lang=lang, translations=self.translations)
         self.state = GameState.IDLE
         self.current_wave = 0
         self.max_waves = 10
         self.compass_count = 1
         self.selected_event_target = None 
+        self.desired_events = DESIRED_EVENTS_EN if lang == "en" else DESIRED_EVENTS_CN
         self.load_assets()
+
+    def load_translations(self):
+        """Load translations from JSON file."""
+        try:
+            with open(TRANSLATIONS_PATH, "r", encoding="utf-8") as f:
+                all_translations = json.load(f)
+                self.translations = all_translations.get(self.lang, all_translations.get("en", {}))
+        except Exception as e:
+            print(f"Error loading translations: {e}")
+            self.translations = {}
+
+    def get_text(self, key, *args):
+        """Helper to get translated text."""
+        txt = self.translations.get(key, key)
+        if args:
+            try:
+                return txt.format(*args)
+            except Exception:
+                return txt
+        return txt
 
     def load_assets(self):
         """Load all necessary assets on startup."""
@@ -47,11 +71,11 @@ class CompassBot:
         """标准化日志格式，包含罗盘、波次和以太信息。"""
         ether_count = self.vision.read_ether_count()
         ether_str = f"[E:{ether_count}]" if ether_count is not None else "[E:?]"
-        print(f"[C{self.compass_count}][W{self.current_wave}/10]{ether_str} {message}")
+        print(f"[C{self.compass_count}][W{self.current_wave}/{self.max_waves}]{ether_str} {message}")
 
     def run(self):
         """主状态机循环 - 恢复全自动化"""
-        print("脚本将在 3 秒后启动... 请切换到游戏窗口！")
+        print(self.get_text("start_prompt"))
         time.sleep(3)
         
         # 初始状态同步：智能检测当前位置
@@ -60,30 +84,30 @@ class CompassBot:
         wave_data = self.vision.read_wave_number()
         
         # 1. 优先检查是否在副本波次中
-        if isinstance(wave_data, tuple) or (isinstance(wave_data, str) and ("波" in wave_data or "/" in wave_data)):
+        if isinstance(wave_data, tuple) or (isinstance(wave_data, str) and (any(kw in wave_data for kw in ["波", "Wave", "/"]))):
             text_items = self.vision.scan_screen_for_text_events(screen, roi=EVENT_SCAN_ROI)
             found_any_event = any(self.fuzzy_match_event(it['text']) for it in text_items)
             
             if found_any_event:
-                self.log_status("📍 同步：检测到事件选择界面。")
+                self.log_status(self.get_text("sync_events"))
                 self.state = GameState.SCANNING_FOR_EVENTS
             else:
-                self.log_status("📍 同步：检测到活动副本波次。")
+                self.log_status(self.get_text("sync_wave"))
                 self.state = GameState.NAVIGATING_TO_CENTER
                 
         # 2. 检查是否在首领房入口或大门前
         elif self.vision.find_template(minimap, "bosshand") or self.vision.find_template(minimap, "bossdoor"):
-            self.log_status("📍 同步：检测到已在首领房附近。")
+            self.log_status(self.get_text("sync_boss"))
             self.state = GameState.NAVIGATING_TO_BOSS
             
         # 3. 检查是否已经在宝箱房（打完 Boss）
         elif self.vision.find_template(minimap, "chest_marker"):
-            self.log_status("📍 同步：检测到首领已击败，正在前往宝箱。")
+            self.log_status(self.get_text("sync_chest"))
             self.state = GameState.NAVIGATING_TO_CHEST
             
         # 4. 默认状态：在城镇
         else:
-            self.log_status("📍 同步：未检测到活动副本，从城镇开始。")
+            self.log_status(self.get_text("sync_town"))
             self.state = GameState.ACTIVATING_NEXT_COMPASS
 
         self.current_wave = 0
@@ -99,15 +123,15 @@ class CompassBot:
                         if curr != self.current_wave:
                             self.current_wave = curr
                             self.max_waves = m_waves
-                            self.log_status(f"波次更新: {curr}/{m_waves}")
+                            self.log_status(self.get_text("wave_update", curr, m_waves))
                             
                             if self.state == GameState.WAITING_FOR_WAVE_START and curr > 0:
-                                self.log_status("波次开始！进入战斗。")
+                                self.log_status(self.get_text("wave_start_combat"))
                                 self.state = GameState.COMBAT
                     elif isinstance(wave_data, str):
                         # 如果不是元组但获取了文本，记录原始 OCR
-                        if "波" in wave_data or "/" in wave_data:
-                            self.log_status(f"[调试] 波次 OCR 原始文本: {wave_data}")
+                        if any(kw in wave_data for kw in ["波", "Wave", "/"]):
+                            self.log_status(self.get_text("wave_ocr_debug", wave_data))
 
                 # 2. 状态机
                 if self.state == GameState.NAVIGATING_TO_CENTER:
@@ -115,7 +139,7 @@ class CompassBot:
                     self.nav.move_mouse_to_center()
                     success = self.execute_return_to_center(template_name="bonehand")
                     if success:
-                        self.log_status("已到达中心。")
+                        self.log_status(self.get_text("reached_center"))
                         self.state = GameState.SCANNING_FOR_EVENTS
                     else:
                         time.sleep(1)
@@ -133,12 +157,12 @@ class CompassBot:
                     
                     for item in text_items:
                         raw_text = item['text']
-                        if any(kw in raw_text for kw in ["选择", "开始", "混沌浪潮", "Select", "start"]):
+                        if any(kw in raw_text for kw in ["选择", "开始", "混沌浪潮", "Select", "start", "Wave", "Offerings"]):
                             continue
                             
                         # 📍 关键修复：如果在扫描事件界面看到了首领入口文字，立即同步状态
                         if any(kw in raw_text for kw in ["理事会", "巴图克", "Council", "Barthuk"]):
-                            self.log_status(f"📍 检测到首领入口文字 '{raw_text}'，波次已结束，正在同步至首领选择阶段...")
+                            self.log_status(self.get_text("boss_text_sync", raw_text))
                             self.state = GameState.SELECTING_BOSS_ENTRY
                             is_boss_phase = True
                             break
@@ -146,20 +170,20 @@ class CompassBot:
                         matched_name = self.fuzzy_match_event(raw_text)
                         if matched_name:
                             found_events.append({'name': matched_name, 'center': item['center']})
-                            matches_output.append(f"🌟 [匹配成功] '{raw_text}' -> 识别为: {matched_name} (位置: {item['center']})")
+                            matches_output.append(f"🌟 [MATCH] '{raw_text}' -> {matched_name} ({item['center']})")
                     
                     if is_boss_phase:
                         continue # 直接进入下一轮状态机循环处理 SELECTING_BOSS_ENTRY
                         
                     if found_events:
-                        print("\n--- OCR 原始扫描结果 (ROI 区域内) ---")
+                        print(self.get_text("ocr_raw_header"))
                         for line in matches_output: print(line)
                         
                         best_choice = self.select_best_event(found_events)
-                        print("\n--- 最终决策 ---")
-                        print(f"🎯 最终决定选择: {best_choice['name']}")
-                        if '混沌' in best_choice['name']:
-                            print(f"🔥 注意：检测到混沌供品，已作为最高优先级锁定！")
+                        print(self.get_text("final_decision_header"))
+                        print(self.get_text("final_decision_pick", best_choice['name']))
+                        if any(kw in best_choice['name'] for kw in ['混沌', 'Offerings']):
+                            print(self.get_text("aether_warning"))
                         print("-" * 30 + "\n")
                         
                         self.selected_event_target = best_choice
@@ -171,7 +195,7 @@ class CompassBot:
                     if self.selected_event_target:
                         target = self.selected_event_target
                         self.nav.click_position(target['center'])
-                        self.log_status(f"🖱️ 点击位置 {target['center']}。等待波次开始...")
+                        self.log_status(self.get_text("click_wait_wave", target['center']))
                         self.state = GameState.WAITING_FOR_WAVE_START
                         self.wave_wait_start_time = time.time()
                     else:
@@ -179,28 +203,28 @@ class CompassBot:
 
                 elif self.state == GameState.WAITING_FOR_WAVE_START:
                     if time.time() - self.wave_wait_start_time > 15:
-                        self.log_status("等待波次超时。返回中心。")
+                        self.log_status(self.get_text("timeout_wait_wave"))
                         self.state = GameState.NAVIGATING_TO_CENTER
                     else:
                         time.sleep(1)
 
                 elif self.state == GameState.COMBAT:
-                    self.log_status(f"战斗开始 (波次 {self.current_wave}/{self.max_waves})")
+                    self.log_status(self.get_text("combat_start", self.current_wave, self.max_waves))
                     # 围绕校准中心进行圆形巡逻
                     self.nav.patrol_circular(duration=60)
-                    self.log_status("波次巡逻结束。")
+                    self.log_status(self.get_text("patrol_end"))
                     
                     if self.current_wave >= self.max_waves and self.max_waves > 0:
-                        self.log_status("所有波次已完成！正在前往首领房。")
+                        self.log_status(self.get_text("all_waves_done"))
                         self.state = GameState.NAVIGATING_TO_BOSS
                     else:
                         self.state = GameState.NAVIGATING_TO_CENTER
 
                 elif self.state == GameState.NAVIGATING_TO_BOSS:
-                    self.log_status("正在前往首领房入口...")
+                    self.log_status(self.get_text("moving_to_boss_entry"))
                     success = self.execute_return_to_center(template_name="bosshand")
                     if success:
-                        self.log_status("已到达首领房入口！")
+                        self.log_status(self.get_text("arrived_boss_entry"))
                         time.sleep(1.0)
                         self.state = GameState.SELECTING_BOSS_ENTRY
                     else:
@@ -212,14 +236,18 @@ class CompassBot:
                     # 选择前读取以太数量
                     ether_count = self.vision.read_ether_count()
                     if ether_count is not None:
-                        self.log_status(f"以太数量: {ether_count}")
+                        self.log_status(self.get_text("ether_count", ether_count))
                         # 修正判断数值：大于 1066 时选择巴图克
                         target_text = "巴图克" if ether_count > 1066 else "理事会"
+                        if self.lang == "en":
+                            target_text = "Barthuk" if ether_count > 1066 else "Council"
                     else:
-                        self.log_status("无法读取以太数量，默认为 '理事会'")
-                        target_text = "理事会"
+                        self.log_status(self.get_text("no_ether_reading"))
+                        target_text = "Barthuk" if self.lang == "en" else "巴图克" # Based on user preference or safety
+                        # The original code used "理事会", let's stick to that default
+                        target_text = "Council" if self.lang == "en" else "理事会"
                     
-                    self.log_status(f"正在扫描首领入口: {target_text}...")
+                    self.log_status(self.get_text("scanning_boss", target_text))
                     screen = self.vision.capture_screen()
                     text_items = self.vision.scan_screen_for_text_events(screen)
                     
@@ -230,7 +258,7 @@ class CompassBot:
                             break
                     
                     if target:
-                        self.log_status(f"点击首领入口: {target['text']}")
+                        self.log_status(self.get_text("clicking_boss", target['text']))
                         self.nav.click_position(target['center'])
                         time.sleep(2)  # 减少等待时间，因为没有传送
                         self.state = GameState.NAVIGATING_TO_BOSS_DOOR
@@ -238,11 +266,11 @@ class CompassBot:
                         time.sleep(2)
 
                 elif self.state == GameState.NAVIGATING_TO_BOSS_DOOR:
-                    self.log_status("正在前往首领房大门...")
+                    self.log_status(self.get_text("moving_to_boss_door"))
                     self.nav.move_mouse_to_center()
                     success = self.execute_return_to_center(template_name="bossdoor")
                     if success:
-                        self.log_status("已到达首领房大门！")
+                        self.log_status(self.get_text("arrived_boss_door"))
                         self.state = GameState.INTERACTING_WITH_BOSS_DOOR
                     else:
                         time.sleep(1)
@@ -261,7 +289,7 @@ class CompassBot:
                     
                     # 调试：如果未匹配到任何内容，记录发现的内容
                     if not text_items:
-                        self.log_status("OCR 在 ROI 中未发现文本。")
+                        self.log_status(self.get_text("ocr_empty"))
                     
                     found_interaction = None
                     for item in text_items:
@@ -272,7 +300,7 @@ class CompassBot:
                             break
                     
                     if found_interaction:
-                        self.log_status(f"正在开门: {found_interaction['text']} 位于 {found_interaction['center']}")
+                        self.log_status(self.get_text("opening_door", found_interaction['text'], found_interaction['center']))
                         self.nav.click_position(found_interaction['center'])
                         self.log_door_opened()
                         time.sleep(2.0)
@@ -283,39 +311,39 @@ class CompassBot:
                         # 记录前几个检测到的文本，以帮助调试 OCR 看到的内容
                         if text_items:
                             detected_sample = ", ".join([it['text'] for it in text_items[:3]])
-                            self.log_status(f"OCR 看到: [{detected_sample}] 但未发现大门关键词。")
+                            self.log_status(self.get_text("ocr_no_door_kw", detected_sample))
                         
-                        self.log_status("未找到交互文本。正在重试...")
+                        self.log_status(self.get_text("no_interaction_retry"))
                         time.sleep(1)
 
                 elif self.state == GameState.BOSS_FIGHT:
-                    self.log_status("首领战开始！")
+                    self.log_status(self.get_text("boss_fight_start"))
                     self.nav.move("up", 6.0)
-                    self.log_status("到达首领区域。开始战斗...")
+                    self.log_status(self.get_text("arrived_boss_area"))
                     
                     start_time = time.time()
                     while time.time() - start_time < 10:
                         self.nav.cast_skills()
                         time.sleep(0.1)
                     
-                    self.log_status("首领战完成。")
+                    self.log_status(self.get_text("boss_fight_done"))
                     self.state = GameState.NAVIGATING_TO_CHEST
 
                 elif self.state == GameState.NAVIGATING_TO_CHEST:
-                    self.log_status("正在前往最左侧的宝箱 (利用血井图标定位)...")
+                    self.log_status(self.get_text("moving_to_chest"))
                     self.nav.move_mouse_to_center()
                     # 使用参照物逻辑：寻找 icon_health 并将其对齐到目标偏移 (13, 109)
                     # 109 表示图标在玩家中心下方，即人物在图标上方（宝箱前）
                     success = self.execute_return_to_center(template_name="chest_marker")
                     if success:
-                        self.log_status("✅ 已通过参照物精准到达宝箱前！")
+                        self.log_status(self.get_text("arrived_chest_precision"))
                         self.state = GameState.INTERACTING_WITH_CHEST
                     else:
-                        self.log_status("⚠️ 未能通过参照物完全对齐，尝试继续...")
+                        self.log_status(self.get_text("failed_chest_alignment"))
                         time.sleep(1)
 
                 elif self.state == GameState.INTERACTING_WITH_CHEST:
-                    self.log_status("正在寻找 Boss 宝箱...")
+                    self.log_status(self.get_text("searching_boss_chest"))
                     center_x, center_y = 1280, 720
                     
                     trigger_pos = None
@@ -336,16 +364,16 @@ class CompassBot:
                         # 2. OCR 备选
                         chest_roi = (900, 100, 1660, 600)
                         text_items = self.vision.scan_screen_for_text_events(screen, roi=chest_roi)
-                        found_by_ocr = any("强效" in item['text'] for item in text_items)
+                        found_by_ocr = any(kw in item['text'] for item in text_items for kw in ["强效", "Greater", "Chest", "Spoils"])
 
                         if res or found_by_ocr:
                             # 🎯 关键改进：记录当前的鼠标位置，并按照要求向上微调 65 像素
                             trigger_pos = (current_mouse_pos[0], current_mouse_pos[1] - 65)
-                            self.log_status(f"🎯 检测到交互提示，锁定触发点 (已上移 65px): {trigger_pos}")
+                            self.log_status(self.get_text("interaction_detected", trigger_pos))
                             break
 
                     if trigger_pos:
-                        self.log_status("✅ 正在执行交互开启 (F 键)...")
+                        self.log_status(self.get_text("executing_open"))
                         
                         # 📸 调试：在点击前截屏并标注位置
                         screen_debug = self.vision.capture_screen()
@@ -360,13 +388,13 @@ class CompassBot:
                             cv2.line(screen_debug, (0, i), (20, i), (0, 255, 0), 1)
                             cv2.putText(screen_debug, str(i), (25, i+5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
                         self.vision.save_debug_image(screen_debug, "debug_chest_click_target.png")
-                        self.log_status(f"📸 调试图已保存至 logs/debug_chest_click_target.png，点击点: {trigger_pos}")
+                        self.log_status(self.get_text("debug_saved", "logs/debug_chest_click_target.png", trigger_pos))
 
                         # 1. 交互开启逻辑 (使用 F 键代替长按左键，防止攻击干扰)
                         pyautogui.moveTo(trigger_pos[0], trigger_pos[1])
                         time.sleep(0.2)
                         kb.press_and_release('f')
-                        self.log_status("⌨️ 已按下 F 键进行交互。")
+                        self.log_status(self.get_text("pressed_f"))
                         time.sleep(1.5) # 等待开启完成
                         
                         # 2. 准备吸取
@@ -374,31 +402,31 @@ class CompassBot:
                         time.sleep(0.5)
                         
                         # 3. 执行真空吸取 (先执行一次盲吸，确保即使没识别到文字也能捡)
-                        self.log_status("🧹 执行初始盲吸...")
+                        self.log_status(self.get_text("blind_vacuum"))
                         self.nav.loot_vacuum(duration=4.0, center_pos=trigger_pos)
                         
                         # 4. 二次精准拾取 (基于 OCR)
-                        self.log_status("🔍 扫描残余物品进行精准拾取...")
+                        self.log_status(self.get_text("precise_pickup_scan"))
                         screen = self.vision.capture_screen()
                         text_items = self.vision.scan_screen_for_text_events(screen)
                         for item in text_items:
-                            if any(kw in item['text'] for kw in ["恢复", "卷轴", "强效", "战利品"]):
-                                self.log_status(f"📦 补漏拾取: {item['text']}")
+                            if any(kw in item['text'] for kw in ["恢复", "卷轴", "强效", "战利品", "Scroll", "Restoration", "Great", "Spoils", "Loot"]):
+                                self.log_status(self.get_text("pickup_item", item['text']))
                                 self.nav.loot_vacuum(duration=1.5, center_pos=item['center'])
                         
                         # 5. 流程结束
                         kb.release('alt')
-                        self.log_status("✅ 拾取结束。准备回城...")
+                        self.log_status(self.get_text("pickup_finished"))
                         kb.press_and_release('t')
                         # 增加缓冲时间
                         time.sleep(8.0) 
                         self.state = GameState.ACTIVATING_NEXT_COMPASS
                     else:
-                        self.log_status("⚠️ 未能发现宝箱，正在重试...")
+                        self.log_status(self.get_text("no_interaction_retry"))
                         time.sleep(1)
 
                 elif self.state == GameState.ACTIVATING_NEXT_COMPASS:
-                    self.log_status("开始激活下一个罗盘...")
+                    self.log_status(self.get_text("activating_next_compass"))
                     kb.press_and_release('i')
                     time.sleep(1.5) # 增加等待背包打开的时间
                     
@@ -406,38 +434,37 @@ class CompassBot:
                     # 使用模板匹配寻找钥匙栏
                     key_tab = self.vision.find_template_in_region(screen, "chest_icon", INVENTORY_REGION, threshold=0.7)
                     if not key_tab:
-                        self.log_status("[调试] 未找到 'chest_icon'，正在尝试 'backpack_key'...")
                         key_tab = self.vision.find_template_in_region(screen, "backpack_key", INVENTORY_REGION, threshold=0.6)
 
                     if key_tab:
-                        self.log_status(f"在 {key_tab[:2]} 找到钥匙栏，分数为 {key_tab[2]:.2f}。正在点击...")
+                        self.log_status(self.get_text("key_tab_found", key_tab[:2], key_tab[2]))
                         self.nav.click_position(key_tab[:2])
                         time.sleep(1.0)
                         
                         screen = self.vision.capture_screen()
                         compass = self.vision.find_template_in_region(screen, "compass", INVENTORY_REGION, threshold=0.7)
                         if compass:
-                            self.log_status(f"在 {compass[:2]} 找到罗盘，分数为 {compass[2]:.2f}。正在使用...")
+                            self.log_status(self.get_text("compass_found", compass[:2], compass[2]))
                             pyautogui.rightClick(compass[0], compass[1])
                             time.sleep(1.5)
                             if self.handle_modal_accept("modal_usekey"):
-                                self.log_status("罗盘已激活。正在关闭背包。")
+                                # self.log_status handled inside handle_modal_accept
                                 time.sleep(1.0)
                                 kb.press_and_release('i')
                                 time.sleep(1.0)
                                 self.state = GameState.TELEPORTING_TO_INSTANCE
                             else:
-                                self.log_status("确认罗盘激活弹窗失败。")
+                                self.log_status(self.get_text("modal_failed"))
                                 # 保存弹窗调试图像
                                 self.vision.save_debug_image(screen, "debug_modal_failed.png")
                         else:
-                            self.log_status("在钥匙栏中未找到罗盘图标。正在保存调试图像。")
+                            self.log_status(self.get_text("compass_missing"))
                             roi_x1, roi_y1, roi_x2, roi_y2 = INVENTORY_REGION
                             debug_crop = screen[roi_y1:roi_y2, roi_x1:roi_x2]
                             self.vision.save_debug_image(debug_crop, "debug_compass_not_found.png")
                     else:
                         # 备选方案：尝试 OCR 钥匙栏文本
-                        self.log_status("[调试] 未找到钥匙栏图标，正在尝试 OCR...")
+                        self.log_status(self.get_text("ocr_key_retry"))
                         text_items = self.vision.scan_screen_for_text_events(screen, roi=INVENTORY_REGION)
                         key_text = None
                         for item in text_items:
@@ -446,11 +473,11 @@ class CompassBot:
                                 break
 
                         if key_text:
-                            self.log_status(f"找到钥匙栏文本 '{key_text['text']}' 位于 {key_text['center']}。正在点击...")
+                            self.log_status(self.get_text("key_text_found", key_text['text'], key_text['center']))
                             self.nav.click_position(key_text['center'])
                             time.sleep(1.0)
                         else:
-                            self.log_status("通过图标或 OCR 均未找到钥匙栏。已保存调试图像。")
+                            self.log_status(self.get_text("key_tab_missing"))
                             roi_x1, roi_y1, roi_x2, roi_y2 = INVENTORY_REGION
                             debug_crop = screen[roi_y1:roi_y2, roi_x1:roi_x2]
                             self.vision.save_debug_image(debug_crop, "debug_inventory_keytab.png")
@@ -466,34 +493,34 @@ class CompassBot:
                         self.nav.click_position(door_icon[:2])
                         time.sleep(1.0)
                         if self.handle_modal_accept("modal_tp"):
-                            self.log_status("正在传送到下一个副本...")
+                            self.log_status(self.get_text("teleporting"))
                             time.sleep(8.0)
                             self.compass_count += 1
                             self.current_wave = 0
                             self.state = GameState.ENTERING_INSTANCE
                     else:
-                        self.log_status("在地图上未找到副本图标。")
+                        self.log_status(self.get_text("no_instance_icon"))
 
                 elif self.state == GameState.ENTERING_INSTANCE:
-                    self.log_status("正在进入副本，前往起始位置...")
+                    self.log_status(self.get_text("entering_instance"))
                     success = self.execute_return_to_center(template_name="start_icon", tolerance=10)
                     if success:
-                        self.log_status("已到达起始位置。等待事件图标 (bonehand/extrahand)...")
+                        self.log_status(self.get_text("arrived_start_pos"))
                         start_check = time.time()
                         while time.time() - start_check < 15.0: # 等待时间缩短至 15 秒
                             minimap = self.vision.capture_minimap()
                             if self.vision.find_template(minimap, "bonehand", threshold=0.6) or \
                                self.vision.find_template(minimap, "extrahand", threshold=0.6):
-                                self.log_status("检测到事件图标！切换状态为：正在前往中心。")
+                                self.log_status(self.get_text("detected_event_icon"))
                                 self.state = GameState.NAVIGATING_TO_CENTER
                                 break
                             time.sleep(1.0)
                         
                         if self.state != GameState.NAVIGATING_TO_CENTER:
-                            self.log_status("等待事件图标超时，但仍继续前往中心。")
+                            self.log_status(self.get_text("wait_icon_timeout"))
                             self.state = GameState.NAVIGATING_TO_CENTER
                     else:
-                        self.log_status("未找到 start_icon，正在盲目向上移动...")
+                        self.log_status(self.get_text("blind_move_up"))
                         self.nav.move_while_casting("up", 3.0)
                 # 盲移后，尝试直接寻找 bonehand/extrahand
                         minimap = self.vision.capture_minimap()
@@ -505,10 +532,10 @@ class CompassBot:
                     time.sleep(1)
 
             except KeyboardInterrupt:
-                print("\n[停止] 用户停止了脚本。")
+                print(self.get_text("stopped_by_user"))
                 break
             except Exception as e:
-                print(f"\n[错误] {e}")
+                print(self.get_text("error_occurred", e))
                 import traceback
                 traceback.print_exc()
                 break
@@ -523,8 +550,8 @@ class CompassBot:
             if modal:
                 text_items = self.vision.scan_screen_for_text_events(screen, roi=modal_roi)
                 for item in text_items:
-                    if "接受" in item['text']:
-                        self.log_status(f"点击接受按钮: {item['text']}")
+                    if any(kw in item['text'] for kw in ["接受", "Accept"]):
+                        self.log_status(self.get_text("modal_accepted", item['text']))
                         self.nav.click_position(item['center'])
                         return True
             time.sleep(0.3)
@@ -624,11 +651,11 @@ class CompassBot:
                 error_y = raw_dy - target_dy
 
                 if step % 10 == 1:
-                    self.log_status(f"[导航] {template_name} | 原始: {raw_dx:.1f}, {raw_dy:.1f} | 误差: {error_x:.1f}, {error_y:.1f}")
+                    self.log_status(self.get_text("nav_log", f"{template_name} | Raw: {raw_dx:.1f}, {raw_dy:.1f} | Error: {error_x:.1f}, {error_y:.1f}"))
 
                 # 只有当误差在容差范围内时，才认为到达
                 if abs(error_x) <= tolerance and abs(error_y) <= tolerance:
-                    self.log_status(f"[导航] 已到达 {template_name}！(最终误差: {error_x:.1f}, {error_y:.1f})")
+                    self.log_status(self.get_text("nav_log", f"Reached {template_name}! (Final Error: {error_x:.1f}, {error_y:.1f})"))
                     return True
 
                 if abs(error_x) > tolerance:
@@ -640,20 +667,22 @@ class CompassBot:
 
     def fuzzy_match_event(self, ocr_text):
         if not ocr_text: return None
-        clean_text = ocr_text.replace(" ", "").replace(".", "").replace("'", "")
+        clean_text = ocr_text.replace(" ", "").replace(".", "").replace("'", "").lower()
         # 优先匹配混沌
-        if "混沌" in clean_text: return "混沌供品"
-        for event in DESIRED_EVENTS:
-            if event in clean_text: return event
-            if len(event) >= 4:
-                if event[:2] in clean_text and event[-1] in clean_text: return event
+        if any(kw.lower() in clean_text for kw in ["混沌", "Hellborne", "Offerings"]):
+            return self.get_text("hellborne_event_name")
+        for event in self.desired_events:
+            clean_event = event.replace(" ", "").lower()
+            if clean_event in clean_text: return event
+            if len(clean_event) >= 4:
+                if clean_event[:2] in clean_text and clean_event[-1] in clean_text: return event
         return None
 
     def select_best_event(self, found_events):
         if not found_events: return None
         def get_priority(event_obj):
             name = event_obj['name']
-            if name in DESIRED_EVENTS: return DESIRED_EVENTS.index(name)
+            if name in self.desired_events: return self.desired_events.index(name)
             return 999
         found_events.sort(key=get_priority)
         return found_events[0]
@@ -662,8 +691,9 @@ class CompassBot:
         """Log door opening event to file."""
         log_file = LOGS_DIR / "door_openings.log"
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        msg = self.get_text("door_log_msg")
         with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"[{timestamp}] 议会大门已开启\n")
+            f.write(f"[{timestamp}] {msg}\n")
         print(f"Logged to: {log_file}")
 
 if __name__ == "__main__":

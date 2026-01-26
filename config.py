@@ -3,6 +3,7 @@ from pathlib import Path
 # Paths
 ROOT_DIR = Path(__file__).parent
 ASSETS_DIR = ROOT_DIR / "assets"
+TRANSLATIONS_PATH = ASSETS_DIR / "translations.json"
 EVENTS_LIB_DIR = ASSETS_DIR / "events_library"
 REFS_DIR = ROOT_DIR / "refs"
 LOGS_DIR = ROOT_DIR / "logs"
@@ -39,8 +40,8 @@ CHEST_TOLERANCE = 1  # New tolerance for chest
 # Navigation Limits
 MAX_STEPS = 50
 
-# Event Priority List (High to Low)
-DESIRED_EVENTS = [
+# Event Priority List (High to Low) - Chinese
+DESIRED_EVENTS_CN = [
     '混沌供品',
     '以太地精',
     '尾行恶魔',
@@ -65,4 +66,32 @@ DESIRED_EVENTS = [
     '饥饿尖塔',
     '崛起之塔',
     '燃烧的火雨'
+]
+
+# Event Priority List (High to Low) - English
+DESIRED_EVENTS_EN = [
+    'Hellborne Offerings',
+    'Ether Goblins',
+    'Stalking Devils',
+    'Swelling Aether',
+    'Summons of the Hellborne',
+    'Hellborne Ambush',
+    'Noble Hellborne',
+    'Elite Fiends',
+    'Surging Hellborne',
+    'Fiend Hordes',
+    'Massing Aether',
+    'Hoard of Wealth',
+    'Filling Aether',
+    'Anchored Aether',
+    'Vicious Aether',
+    'Precious Spire',
+    'Noble Hellhorde',
+    'Noble Fiend',
+    'Noble Hellborne',
+    'Bloodspire',
+    'Bursting Aether',
+    'Hungry Spire',
+    'Rising Spire',
+    'Burning Rain'
 ]

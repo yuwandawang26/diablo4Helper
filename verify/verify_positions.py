@@ -9,12 +9,14 @@
 模式 2 - 使用 config 验证 minimap_readyloop.png：
   - 在 config 位置上绘制标记，并在小地图内查找 icon_health 参照物。
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import argparse
 import cv2
 import numpy as np
 import re
-from pathlib import Path
-
 from config import MINIMAP_REGION, PLAYER_POS, COMPASS_ICON_POS, WAVE_REGION, BOSS_DOOR_POS, LOGS_DIR, ASSETS_DIR, MATCH_THRESHOLD, ROOT_DIR
 
 LOGS_DIR.mkdir(exist_ok=True)

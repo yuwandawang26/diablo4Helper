@@ -7,12 +7,24 @@ from pathlib import Path
 from config import MINIMAP_REGION, WAVE_REGION, ETHER_REGION, LOGS_DIR
 
 class VisionSystem:
-    def __init__(self):
+    def __init__(self, lang="cn", translations=None):
         self.templates = {}
-        print("[OCR] 正在初始化 EasyOCR...")
+        self.lang = lang
+        self.translations = translations or {}
+        
+        print(self.get_text("ocr_init"))
         # 抑制详细输出
         self.reader = easyocr.Reader(['ch_sim', 'en'], gpu=True, verbose=False) 
-        print("[OCR] EasyOCR 初始化完成。")
+        print(self.get_text("ocr_init_done"))
+
+    def get_text(self, key, *args):
+        txt = self.translations.get(key, key)
+        if args:
+            try:
+                return txt.format(*args)
+            except Exception:
+                return txt
+        return txt
 
     def load_template(self, name: str, path: Path):
         """Loads a single template image (e.g. minimap icon)."""
@@ -35,6 +47,12 @@ class VisionSystem:
         x1, y1, x2, y2 = MINIMAP_REGION
         width = x2 - x1
         height = y2 - y1
+        
+        # Check bounds to avoid crash
+        sw, sh = pyautogui.size()
+        if x2 > sw or y2 > sh:
+            raise ValueError(self.get_text("screen_error", MINIMAP_REGION, (sw, sh)))
+            
         shot = pyautogui.screenshot(region=(x1, y1, width, height))
         return cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
     
@@ -130,6 +148,11 @@ class VisionSystem:
         w = x2 - x1
         h = y2 - y1
         
+        # Check bounds
+        sw, sh = pyautogui.size()
+        if x2 > sw or y2 > sh:
+            return None # Don't crash, just return None
+            
         shot = pyautogui.screenshot(region=(x1, y1, w, h))
         img = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
         
@@ -187,6 +210,11 @@ class VisionSystem:
         w = x2 - x1
         h = y2 - y1
         
+        # Check bounds
+        sw, sh = pyautogui.size()
+        if x2 > sw or y2 > sh:
+            return None
+            
         shot = pyautogui.screenshot(region=(x1, y1, w, h))
         img = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
         

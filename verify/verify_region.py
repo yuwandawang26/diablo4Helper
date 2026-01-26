@@ -1,8 +1,11 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import cv2
 import time
 import numpy as np
 import pyautogui
-from pathlib import Path
 from config import EVENT_SCAN_ROI, WAVE_REGION, ETHER_REGION, LOGS_DIR
 
 def draw_ruler(img):

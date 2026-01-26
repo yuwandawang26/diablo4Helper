@@ -4,8 +4,18 @@ import pyautogui
 import random
 
 class NavigationSystem:
-    def __init__(self):
-        pass
+    def __init__(self, lang="cn", translations=None):
+        self.lang = lang
+        self.translations = translations or {}
+
+    def get_text(self, key, *args):
+        txt = self.translations.get(key, key)
+        if args:
+            try:
+                return txt.format(*args)
+            except Exception:
+                return txt
+        return txt
 
     def move(self, direction: str, duration: float):
         """Presses a key for a specific duration."""
@@ -29,7 +39,7 @@ class NavigationSystem:
     def click_position(self, pos):
         """移动鼠标到指定位置并左键点击。"""
         x, y = pos
-        print(f"🖱️ 正在点击 ({x}, {y})")
+        print(self.get_text("clicking", x, y))
         pyautogui.moveTo(x, y, duration=0.2)
         time.sleep(0.1)
         pyautogui.click()
@@ -64,7 +74,7 @@ class NavigationSystem:
         """
         按顺序在 4 个象限巡逻，但半径更紧凑。
         """
-        print(f"⚔️ 开始紧凑巡逻，持续 {duration} 秒...")
+        print(self.get_text("patrol_start", duration))
         start_time = time.time()
         
         quadrants = [
@@ -98,7 +108,7 @@ class NavigationSystem:
             # 3. 向后移动（与向外移动时间相同，以返回中心）
             self.move_while_casting(move_back_dir, 0.8)
             
-        print("⚔️ 巡逻结束。")
+        print(self.get_text("patrol_end"))
 
     def playback_recorded_actions(self, filepath):
         """同步回放录制的键盘和鼠标动作。"""
@@ -192,7 +202,7 @@ class NavigationSystem:
     def loot_vacuum(self, duration=5.0, center_pos=(1280, 720)):
         """强制交互拾取：以重心周围进行扫动，并狂按 F 键进行拾取。"""
         cx, cy = center_pos
-        print(f"🧹 强制交互拾取模式 (F 键)：以 {center_pos} 为中心执行 F 键吸取...")
+        print(self.get_text("loot_start", center_pos))
         
         start_time = time.time()
         
@@ -210,4 +220,4 @@ class NavigationSystem:
                 kb.press_and_release('f')
                 if time.time() - start_time >= duration: break
                     
-        print("✅ 强制交互拾取结束。")
+        print(self.get_text("loot_end"))
