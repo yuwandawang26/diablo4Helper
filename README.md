@@ -50,23 +50,36 @@ This is a fully automated Diablo 4 Compass Farm tool based on image recognition 
 *   `config.py`: 全局配置（ROI 区域、资产路径、优先级列表等）/ Global configuration (ROI regions, asset paths, priority lists, etc.)
 *   `verify_*.py`: 各个环节的独立测试与视觉化调试脚本 / Independent testing and visualization debug scripts for each stage
 
-## 使用说明 / Usage Instructions
-
-1.  确保游戏分辨率为 2560x1440（或根据 `config.py` 调整 ROI）/ Ensure game resolution is 2560x1440 (or adjust ROI in `config.py`)
-2.  安装依赖 / Install dependencies：`pip install -r requirements.txt`
-3.  运行 / Run：`python main.py`
-4.  脚本运行期间请勿手动操作鼠标键盘，如需紧急停止请按 `Ctrl+C` 或移动鼠标至屏幕角落（PyAutoGUI 安全保护）/ Do not manually operate mouse or keyboard during script execution. Press `Ctrl+C` or move mouse to screen corner for emergency stop (PyAutoGUI safety protection)
-
-## 代码仓库 / Code Repository
-
-https://github.com/bean4896/diablo4compassfarm
-
-## 免责声明 / Disclaimer
+## 游戏设置要求 / Game Settings Requirements
 
 **中文 / Chinese：**
 
-本工具仅供学习交流使用，请勿用于商业用途。使用自动化脚本可能违反游戏服务协议，由此产生的风险由使用者自行承担。
+1.  **游戏分辨率 / Game Resolution**：确保游戏分辨率为 2560x1440（或根据 `config.py` 调整 ROI）
+2.  **移动控制 / Movement Control**：在游戏设置中需要将方向键（WASD）设置为移动，确保脚本可以控制角色移动
+3.  **人物Build建议 / Character Build Recommendations**：
+    *   圣骑士光环Build (Auradin) - 推荐使用，光环自动伤害，适合自动化
+    *   飞翼Build (Winstrike) - 备选方案，高机动性和伤害
+    *   其他Build也可以使用，但建议使用能够自动造成伤害或高生存能力的Build
 
 **English：**
 
+1.  **Game Resolution**：Ensure game resolution is 2560x1440 (or adjust ROI in `config.py`)
+2.  **Movement Control**：In game settings, you need to set directional keys (WASD) for movement to ensure the script can control character movement
+3.  **Character Build Recommendations**：
+    *   Paladin Aura Build (Auradin) - Recommended, automatic aura damage, suitable for automation
+    *   Wing Build (Winstrike) - Alternative option, high mobility and damage
+    *   Other builds can also be used, but builds with automatic damage or high survivability are recommended
+
+## 使用说明 / Usage Instructions
+
+1.  确保游戏分辨率为 2560x1440（或根据 `config.py` 调整 ROI）/ Ensure game resolution is 2560x1440 (or adjust ROI in `config.py`)
+2.  在游戏设置中将方向键设置为移动 / Set directional keys for movement in game settings
+3.  安装依赖 / Install dependencies：`pip install -r requirements.txt`
+4.  运行 / Run：`python main.py`
+5.  脚本运行期间请勿手动操作鼠标键盘，如需紧急停止请按 `Ctrl+C` 或移动鼠标至屏幕角落（PyAutoGUI 安全保护）/ Do not manually operate mouse or keyboard during script execution. Press `Ctrl+C` or move mouse to screen corner for emergency stop (PyAutoGUI safety protection)
+
+
+## 免责声明 / Disclaimer
+
+本工具仅供学习交流使用，请勿用于商业用途。使用自动化脚本可能违反游戏服务协议，由此产生的风险由使用者自行承担。
 This tool is for educational purposes only. Do not use for commercial purposes. Using automation scripts may violate game service agreements, and users bear all risks.
