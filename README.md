@@ -3,6 +3,8 @@
 这是一个基于图像识别和 OCR 的暗黑破坏神 4 (Diablo 4) 罗盘副本全自动刷本工具。
 
 This is a fully automated Diablo 4 Compass Farm tool based on image recognition and OCR technology.
+demo
+https://www.youtube.com/watch?v=ChkpE48jsJg
 
 ---
 
