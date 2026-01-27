@@ -66,6 +66,11 @@ class CompassBot:
         self.vision.load_template("modal_usekey", ASSETS_DIR / "modal_usekey.png")
         self.vision.load_template("modal_tp", ASSETS_DIR / "modal_tp_compass.png")
         self.vision.load_template("start_icon", ASSETS_DIR / "icon_start.png")
+        # 装备拾取模板
+        self.vision.load_template("tip_huifu", ASSETS_DIR / "tip_huifu.png")      # 恢复卷轴
+        self.vision.load_template("icon_taigu_tag", ASSETS_DIR / "icon_taigu_tag.png")  # 太古标签
+        # 混沌事件模板（优先检测）
+        self.vision.load_template("hundun_event", ASSETS_DIR / "hundun_event.png")  # 混沌事件
 
     def log_status(self, message):
         """标准化日志格式，包含罗盘、波次和以太信息。"""
@@ -149,6 +154,20 @@ class CompassBot:
                     time.sleep(0.5)
                     screen = self.vision.capture_screen()
                     
+                    # 🔥 优先使用OpenCV模板匹配检测混沌事件
+                    hundun_result = self.vision.find_template(screen, "hundun_event", threshold=0.7)
+                    if hundun_result:
+                        hundun_x, hundun_y, confidence = hundun_result
+                        self.log_status(f"🔥 [OpenCV] 优先检测到混沌事件! 位置: ({hundun_x}, {hundun_y}), 置信度: {confidence:.2f}")
+                        # 直接选择混沌事件，跳过OCR识别
+                        self.selected_event_target = {
+                            'name': self.get_text("hellborne_event_name"),
+                            'center': (hundun_x, hundun_y)
+                        }
+                        self.state = GameState.SELECTING_EVENT
+                        continue
+                    
+                    # 如果OpenCV未检测到，继续使用OCR识别
                     text_items = self.vision.scan_screen_for_text_events(screen, roi=EVENT_SCAN_ROI)
                     
                     found_events = []
@@ -368,7 +387,13 @@ class CompassBot:
 
                         if res or found_by_ocr:
                             # 🎯 关键改进：记录当前的鼠标位置，并按照要求向上微调 65 像素
-                            trigger_pos = (current_mouse_pos[0], current_mouse_pos[1] - 65)
+                            calculated_y = current_mouse_pos[1] - 65
+                            # 验证坐标有效性，防止移动到屏幕外
+                            if calculated_y < 0:
+                                calculated_y = max(0, current_mouse_pos[1] - 30)  # 如果减去65会变成负数，只减去30
+                            trigger_pos = (current_mouse_pos[0], calculated_y)
+                            # 再次验证坐标范围
+                            trigger_pos = (max(0, min(2560, trigger_pos[0])), max(0, min(1440, trigger_pos[1])))
                             self.log_status(self.get_text("interaction_detected", trigger_pos))
                             break
 
@@ -391,31 +416,98 @@ class CompassBot:
                         self.log_status(self.get_text("debug_saved", "logs/debug_chest_click_target.png", trigger_pos))
 
                         # 1. 交互开启逻辑 (使用 F 键代替长按左键，防止攻击干扰)
-                        pyautogui.moveTo(trigger_pos[0], trigger_pos[1])
+                        pyautogui.moveTo(trigger_pos[0], trigger_pos[1], duration=0.2)
                         time.sleep(0.2)
                         kb.press_and_release('f')
                         self.log_status(self.get_text("pressed_f"))
                         time.sleep(1.5) # 等待开启完成
                         
-                        # 2. 准备吸取
-                        kb.press('alt') 
-                        time.sleep(0.5)
-                        
-                        # 3. 执行真空吸取 (先执行一次盲吸，确保即使没识别到文字也能捡)
-                        self.log_status(self.get_text("blind_vacuum"))
-                        self.nav.loot_vacuum(duration=4.0, center_pos=trigger_pos)
-                        
-                        # 4. 二次精准拾取 (基于 OCR)
+                        # 2. 使用OpenCV模板匹配识别恢复卷轴并用鼠标左键点击拾取
                         self.log_status(self.get_text("precise_pickup_scan"))
-                        screen = self.vision.capture_screen()
-                        text_items = self.vision.scan_screen_for_text_events(screen)
-                        for item in text_items:
-                            if any(kw in item['text'] for kw in ["恢复", "卷轴", "强效", "战利品", "Scroll", "Restoration", "Great", "Spoils", "Loot"]):
-                                self.log_status(self.get_text("pickup_item", item['text']))
-                                self.nav.loot_vacuum(duration=1.5, center_pos=item['center'])
                         
-                        # 5. 流程结束
-                        kb.release('alt')
+                        # 定义扫描范围：宽度±250像素，高度1380px（长条长方形）
+                        scan_radius = 250  # 横向半径
+                        scan_height = 1380  # 纵向高度（几乎全屏）
+                        chest_x, chest_y = trigger_pos
+                        # 形成长条长方形：以chest_x为中心±250px宽度，从顶部开始1380px高度
+                        scan_roi = (
+                            max(0, chest_x - scan_radius),           # x1: 左侧边界
+                            0,                                        # y1: 从屏幕顶部开始
+                            min(2560, chest_x + scan_radius),        # x2: 右侧边界
+                            min(1440, scan_height)                    # y2: 高度1380px（接近全屏）
+                        )
+                        
+                        # 📸 生成调试截图：框住扫描范围并标注坐标
+                        screen_debug = self.vision.capture_screen()
+                        roi_x1, roi_y1, roi_x2, roi_y2 = scan_roi
+                        # 绘制扫描范围矩形框（绿色）
+                        cv2.rectangle(screen_debug, (roi_x1, roi_y1), (roi_x2, roi_y2), (0, 255, 0), 3)
+                        # 标注坐标信息
+                        cv2.putText(screen_debug, f"Scan ROI: ({roi_x1}, {roi_y1}) to ({roi_x2}, {roi_y2})", 
+                                   (roi_x1, roi_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                        cv2.putText(screen_debug, f"Chest Click: ({chest_x}, {chest_y})", 
+                                   (chest_x - 100, chest_y - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                        # 在宝箱点击位置画十字
+                        cv2.drawMarker(screen_debug, (chest_x, chest_y), (0, 0, 255), cv2.MARKER_CROSS, 30, 3)
+                        # 标注扫描范围信息
+                        cv2.putText(screen_debug, f"Width: {scan_radius*2}px, Height: {scan_height}px", 
+                                   (roi_x1, roi_y2 + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                        self.vision.save_debug_image(screen_debug, "debug_loot_scan_roi.png")
+                        self.log_status(f"📸 扫描范围截图已保存: logs/debug_loot_scan_roi.png, ROI: {scan_roi}")
+                        
+                        # 拾取循环，最多30秒
+                        start_loot_time = time.time()
+                        max_loot_duration = 30.0
+                        last_scan_time = 0
+                        last_alt_time = 0
+                        scan_interval = 0.5  # 每0.5秒扫描一次
+                        alt_interval = 0.3   # 每0.3秒按一次Alt显示物品名称
+                        
+                        self.log_status("👀 开始拾取，不间断按Alt显示物品名称...")
+                        
+                        while time.time() - start_loot_time < max_loot_duration:
+                            current_time = time.time()
+                            
+                            # 不间断按Alt显示物品名称
+                            if current_time - last_alt_time >= alt_interval:
+                                kb.press_and_release('alt')
+                                last_alt_time = current_time
+                            
+                            # 控制扫描频率
+                            if current_time - last_scan_time < scan_interval:
+                                time.sleep(0.05)
+                                continue
+                            
+                            last_scan_time = current_time
+                            screen = self.vision.capture_screen()
+                            found_item = False
+                            
+                            # 优先拾取列表：恢复卷轴和太古标签装备
+                            priority_items = [
+                                ("tip_huifu", "恢复卷轴", 0.7),
+                                ("icon_taigu_tag", "太古标签装备", 0.7)
+                            ]
+                            
+                            # 在扫描范围内查找优先物品
+                            for tmpl_name, desc, thresh in priority_items:
+                                res = self.vision.find_template_in_region(screen, tmpl_name, scan_roi, threshold=thresh)
+                                if res:
+                                    item_x, item_y, confidence = res
+                                    # 验证坐标是否在扫描范围内
+                                    if roi_x1 <= item_x <= roi_x2 and roi_y1 <= item_y <= roi_y2:
+                                        self.log_status(f"✨ 发现{desc}! 点击拾取: ({item_x}, {item_y}), 置信度: {confidence:.2f}")
+                                        # 使用鼠标左键点击装备位置
+                                        self.nav.click_position((item_x, item_y))
+                                        time.sleep(0.2)  # 等待拾取完成
+                                        found_item = True
+                                        break  # 捡完一个重新扫描，以免位置变动
+                            
+                            if not found_item:
+                                time.sleep(0.05)
+                        
+                        self.log_status("✅ 装备拾取完成（30秒时间到）")
+                        
+                        # 3. 流程结束
                         self.log_status(self.get_text("pickup_finished"))
                         kb.press_and_release('t')
                         # 增加缓冲时间
@@ -570,7 +662,7 @@ class CompassBot:
         
         target_dx, target_dy = 0, 0
         if template_name == "chest_marker":
-            target_dx, target_dy = 13.0, 109.0  # 校准：在宝箱处时血井图标相对于中心的位置
+            target_dx, target_dy = 12.0, 111.0  # 校准：在宝箱处时血井图标相对于中心的位置
         elif template_name == "bossdoor":
             target_dx, target_dy = -3.0, -6.0  # 目标位置：图标相对于玩家中心的位置
 

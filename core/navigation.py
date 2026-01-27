@@ -200,24 +200,6 @@ class NavigationSystem:
         return True
 
     def loot_vacuum(self, duration=5.0, center_pos=(1280, 720)):
-        """强制交互拾取：以重心周围进行扫动，并狂按 F 键进行拾取。"""
-        cx, cy = center_pos
-        print(self.get_text("loot_start", center_pos))
-        
-        start_time = time.time()
-        
-        # 极窄轨道：微量偏移
-        small_lanes = [cx, cx - 60, cx + 60]
-        top_y = cy - 180
-        bottom_y = cy + 40
-        
-        while time.time() - start_time < duration:
-            for x in small_lanes:
-                # 移动鼠标的同时狂按 F
-                pyautogui.moveTo(x, top_y, duration=0.04)
-                kb.press_and_release('f')
-                pyautogui.moveTo(x, bottom_y, duration=0.04)
-                kb.press_and_release('f')
-                if time.time() - start_time >= duration: break
-                    
-        print(self.get_text("loot_end"))
+        """已弃用：此函数不再使用F键拾取。请使用click_position直接点击装备。"""
+        # 保留此函数以保持兼容性，但实际不再使用
+        pass
