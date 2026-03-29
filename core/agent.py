@@ -5,10 +5,24 @@ import numpy as np
 import pyautogui
 from datetime import datetime
 from pathlib import Path
-from config import ASSETS_DIR, PLAYER_POS, MINIMAP_REGION, MATCH_THRESHOLD, CENTER_TOLERANCE, BOSS_DOOR_TOLERANCE, MAX_STEPS, DESIRED_EVENTS_CN, DESIRED_EVENTS_EN, LOGS_DIR, INVENTORY_REGION, EVENT_SCAN_ROI, TRANSLATIONS_PATH
+from config import (
+    ASSETS_DIR, PLAYER_POS, MINIMAP_REGION, MATCH_THRESHOLD,
+    CENTER_TOLERANCE, BOSS_DOOR_TOLERANCE, CHEST_TOLERANCE, MAX_STEPS,
+    DESIRED_EVENTS_CN, DESIRED_EVENTS_EN, LOGS_DIR, INVENTORY_REGION,
+    EVENT_SCAN_ROI, TRANSLATIONS_PATH, NAV_CENTER_DX, NAV_CENTER_DY,
+    INSTANCE_HUD_REGION, DEATH_SCAN_REGION, MODAL_SCAN_REGION,
+    EQUIP_CHEST_NAV_DX, EQUIP_CHEST_NAV_DY, EQUIP_CHEST_SCAN_REGION,
+    MATERIAL_CHEST_NAV_DX, MATERIAL_CHEST_NAV_DY, MATERIAL_CHEST_SCAN_REGION,
+    GOLD_CHEST_NAV_DX, GOLD_CHEST_NAV_DY, GOLD_CHEST_SCAN_REGION,
+)
 from core.vision import VisionSystem
 from core.navigation import NavigationSystem
 from core.enums import GameState
+from core.settings_manager import (
+    load_settings, pick_tribute,
+    CHEST_TEMPLATE_NAMES, CHEST_OPEN_ORDER,
+    CHEST_TYPE_KEYWORDS, CHEST_LABEL_CN, identify_chest_type,
+)
 import keyboard as kb
 
 class CompassBot:
@@ -21,8 +35,29 @@ class CompassBot:
         self.current_wave = 0
         self.max_waves = 10
         self.compass_count = 1
-        self.selected_event_target = None 
+        self.selected_event_target = None
         self.desired_events = DESIRED_EVENTS_EN if lang == "en" else DESIRED_EVENTS_CN
+        # UI integration hooks
+        self._running = True
+        self._log_callback = None    # callable(str) - receives formatted log lines
+        self._state_callback = None  # callable(state, compass, wave_curr, wave_max, ether)
+        self._quest_callback = None  # callable(str) - receives current quest-tracker text
+        self._last_ether = None
+        self._last_quest_text = ""   # last emitted quest text (suppress duplicate updates)
+        self._compass_keys = ["compass"]
+        self._last_death_check = 0.0   # throttle death checks
+        self._last_quest_refresh = 0.0 # throttle periodic quest-tracker refresh
+        # ── Chest queue (multi-chest run) ─────────────────────────────────────
+        self._chest_queue: list[str] = []   # ordered chest types yet to open
+        self._chest_attempts: int = 0       # attempts at current chest
+        self._MAX_CHEST_ATTEMPTS: int = 5
+        self._chest_at_base: bool = False   # True once we've reached the base point
+        # ── Run counter ───────────────────────────────────────────────────────
+        self.run_count: int = 0             # completed runs this session
+        self.max_runs: int = 0              # 0 = unlimited; set at start of run()
+        self._run_count_callback = None     # callable(current, max) → UI update
+        # Wire navigation stop-check
+        self.nav.running_check = lambda: self._running
         self.load_assets()
 
     def load_translations(self):
@@ -45,81 +80,375 @@ class CompassBot:
                 return txt
         return txt
 
+    # Map: logical template key -> primary filename stem (used for variant glob scanning)
+    _TEMPLATE_REGISTRY = [
+        ("bonehand",      "minimap_bonehand"),
+        ("extrahand",     "minimap_extrahand"),
+        ("bosshand",      "minimap_bosshand"),
+        ("bossdoor",      "icon_bossdoor"),
+        ("bossdoor_merge","icon_bossdoor_merge"),
+        ("chest_marker",  "icon_health"),
+        ("tip_bosschest", "tip_bosschest"),
+        ("chest_icon",    "icon_key"),
+        ("backpack_key",  "backpack_key"),
+        ("compass",       "icon_compass"),   # kept as "compass" key for agent logic
+        ("compass_door",  "icon_compassdoor"),
+        ("modal_usekey",  "modal_usekey"),
+        ("modal_tp",      "modal_tp_compass"),
+        ("start_icon",    "icon_start"),
+        ("tip_huifu",     "tip_huifu"),
+        ("icon_taigu_tag","icon_taigu_tag"),
+        ("hundun_event",  "hundun_event"),
+        ("modal_death",   "modal_death"),
+        ("hud_instance",  "hud_instance"),  # compass instance HUD icon (top-right wave box)
+    ]
+
     def load_assets(self):
-        """Load all necessary assets on startup."""
-        self.vision.load_template("bonehand", ASSETS_DIR / "minimap_bonehand.png")
-        self.vision.load_template("extrahand", ASSETS_DIR / "minimap_extrahand.png")
-        self.vision.load_template("bosshand", ASSETS_DIR / "minimap_bosshand.png")
-        self.vision.load_template("bossdoor", ASSETS_DIR / "icon_bossdoor.png")
-        self.vision.load_template("bossdoor_merge", ASSETS_DIR / "icon_bossdoor_merge.png")
-        # icon_health.png = 玩家在宝箱跟前时小地图上的位置参照（血井图标）
-        self.vision.load_template("chest_marker", ASSETS_DIR / "icon_health.png")
-        # 宝箱交互提示图标 (OpenCV 识别)
-        self.vision.load_template("tip_bosschest", ASSETS_DIR / "tip_bosschest.png")
-        # icon_key.png = 宝箱在小地图上的图标 (key tab in inventory)
-        self.vision.load_template("chest_icon", ASSETS_DIR / "icon_key.png")
-        # Optional key tab icon from backpack UI
-        self.vision.load_template("backpack_key", ASSETS_DIR / "backpack_key.png")
-        # New assets for next compass activation
-        self.vision.load_template("compass", ASSETS_DIR / "icon_compass.png")
-        self.vision.load_template("compass_door", ASSETS_DIR / "icon_compassdoor.png")
-        self.vision.load_template("modal_usekey", ASSETS_DIR / "modal_usekey.png")
-        self.vision.load_template("modal_tp", ASSETS_DIR / "modal_tp_compass.png")
-        self.vision.load_template("start_icon", ASSETS_DIR / "icon_start.png")
-        # 装备拾取模板
-        self.vision.load_template("tip_huifu", ASSETS_DIR / "tip_huifu.png")      # 恢复卷轴
-        self.vision.load_template("icon_taigu_tag", ASSETS_DIR / "icon_taigu_tag.png")  # 太古标签
-        # 混沌事件模板（优先检测）
-        self.vision.load_template("hundun_event", ASSETS_DIR / "hundun_event.png")  # 混沌事件
+        """Load all templates with multi-variant support.
+
+        For each template key, the primary file is loaded first, followed by
+        any variants named  <stem>_v2.png, <stem>_v3.png, etc.
+        All variants are stored as a list in VisionSystem.templates[key] so
+        find_template automatically tries every variant and returns the best match.
+        """
+        for key, stem in self._TEMPLATE_REGISTRY:
+            # 1. Load the canonical file (e.g. icon_compass.png)
+            self.vision.load_template(key, ASSETS_DIR / f"{stem}.png")
+            # 2. Load any additional variant files (icon_compass_v2.png, icon_compass_v3.png …)
+            for variant in sorted(ASSETS_DIR.glob(f"{stem}_v*.png")):
+                self.vision.load_template(key, variant)
+
+        # Print how many variants were loaded for multi-variant templates
+        for key, _stem in self._TEMPLATE_REGISTRY:
+            n = self.vision.variant_count(key)
+            if n > 1:
+                print(f"[资源] {key}: {n} 个变种模板已加载")
+
+        # Compass special: keep backward-compatible _compass_keys for any future use
+        self._compass_keys = ["compass"]
+
+    def check_and_handle_death(self) -> bool:
+        """Detect the death screen and click the resurrection button.
+
+        Detection priority:
+          1. Template match against assets/modal_death.png (fast, no OCR).
+             The template should contain the full-screen death overlay including
+             the resurrection button.  Multiple variants (_v2.png …) are supported.
+          2. OCR scan of the lower-centre screen band for resurrection keywords.
+             Used when no death template has been uploaded.
+
+        Returns True if death was detected and resurrection was triggered.
+        Throttled to at most once every 4 seconds.
+        """
+        now = time.time()
+        if now - self._last_death_check < 4.0:
+            return False
+        self._last_death_check = now
+
+        try:
+            screen = self.vision.capture_screen()
+            h, w = screen.shape[:2]
+
+            # ── Method 1: template match (fast) ──────────────────────────────
+            if self.vision.variant_count("modal_death") > 0:
+                result = self.vision.find_template(screen, "modal_death", threshold=0.55)
+                if result:
+                    cx, cy, conf = result
+                    self.log_status(f"💀 死亡模板匹配！(conf={conf:.2f}) 点击: ({cx},{cy})")
+                    self._do_resurrect((cx, cy))
+                    return True
+
+            # ── Method 2: OCR fallback ────────────────────────────────────────
+            from config import DEATH_SCAN_REGION
+            text_items = self.vision.scan_screen_for_text_events(screen, roi=DEATH_SCAN_REGION)
+            for item in text_items:
+                t = item["text"]
+                if any(kw in t for kw in [
+                    "在存档点重生", "存档点重生", "重生",
+                    "Resurrect", "checkpoint", "Checkpoint",
+                ]):
+                    self.log_status(f"💀 OCR 检测到死亡！点击复活: {item['center']}")
+                    self._do_resurrect(item["center"])
+                    return True
+
+        except Exception as e:
+            print(f"[death check error] {e}")
+        return False
+
+    def _do_resurrect(self, click_pos: tuple):
+        """Click the resurrection button and wait for respawn."""
+        self.state = GameState.DEAD
+        self.nav.click_position(click_pos)
+        time.sleep(6.0)
+        self.log_status("✅ 已复活，重新导航至中心")
+        self.state = GameState.NAVIGATING_TO_CENTER
+        self._last_death_check = time.time()
+
+    # ── Quest-tracker helpers ─────────────────────────────────────────────────
+
+    def _emit_run_count(self):
+        """Push run-count update to the overlay via callback."""
+        if self._run_count_callback:
+            self._run_count_callback(self.run_count, self.max_runs)
+
+    def _emit_quest(self, text: str):
+        """Emit quest text to overlay if changed; always print when non-empty."""
+        if text != self._last_quest_text:
+            self._last_quest_text = text
+            print(f"[QUEST-CHANGE] {text!r}")
+            if self._quest_callback and text:
+                self._quest_callback(text)
+        elif text and self._quest_callback:
+            # Still emit periodically so overlay stays populated after reconnect
+            self._quest_callback(text)
+
+    # ── Behaviour-tree priority monitor ──────────────────────────────────────────
+    def _priority_tick(self, interrupt: dict) -> bool:
+        """BT Root Selector — checks high-priority conditions in order.
+
+        Does ONE quest-tracker OCR scan per call and fans the result to all
+        three checks so there is only one screenshot+OCR per tick.
+
+        Parameters
+        ----------
+        interrupt : dict
+            Shared mutable dict updated with the reason when True is returned.
+            Keys: ``reason`` → one of ``'dead'``, ``'offering'``, ``'combat'``.
+
+        Returns True if an interrupt was triggered and the caller should stop
+        its current blocking operation.
+        """
+        # P1 ── Death (handles click + wait + state change internally)
+        if self.check_and_handle_death():
+            interrupt['reason'] = 'dead'
+            return True
+
+        # Single OCR scan for P2/P3
+        quest_text = self.vision.read_quest_tracker()
+        self._emit_quest(quest_text)
+
+        # P2 ── Horde complete — detectable from any non-boss state.
+        # "已击败炼狱魔潮" means the final offering was chosen; go to boss room.
+        _horde_states = (
+            GameState.COMBAT, GameState.NAVIGATING_TO_CENTER,
+            GameState.SCANNING_FOR_EVENTS, GameState.SELECTING_EVENT,
+            GameState.WAITING_FOR_WAVE_START,
+        )
+        if self.state in _horde_states and self.vision.check_horde_complete(quest_text):
+            if not getattr(self, "_bt_last_reason", None) == "horde_complete":
+                self._bt_last_reason = "horde_complete"
+                self.log_status("[BT-P2] 「已击败炼狱魔潮」→ 最终供奉完成，前往 Boss 房")
+            interrupt['reason'] = 'horde_complete'
+            return True
+
+        # P3 ── Offering-selection phase — only meaningful while in COMBAT.
+        # Once we leave combat (navigating / scanning / etc.) this signal has
+        # already served its purpose; re-firing it would cause state ping-pong.
+        if self.state == GameState.COMBAT and self.vision.check_offering_selection(quest_text):
+            if not getattr(self, "_bt_last_reason", None) == "offering":
+                self._bt_last_reason = "offering"
+                self.log_status("[BT-P3] 「选择炼狱供奉」→ 战斗结束，前往中心")
+            interrupt['reason'] = 'offering'
+            return True
+
+        # P4 ── Combat re-triggered from any non-combat state (teammate picked
+        # an offering and a new wave started while we were navigating / scanning).
+        if self.state != GameState.COMBAT and self.vision.check_combat_quest(quest_text):
+            if not getattr(self, "_bt_last_reason", None) == "combat":
+                self._bt_last_reason = "combat"
+                self.log_status("[BT-P4] 战斗任务「消灭怪物」→ 进入战斗")
+            interrupt['reason'] = 'combat'
+            return True
+
+        self._bt_last_reason = None
+
+        return False
 
     def log_status(self, message):
         """标准化日志格式，包含罗盘、波次和以太信息。"""
         ether_count = self.vision.read_ether_count()
+        self._last_ether = ether_count
         ether_str = f"[E:{ether_count}]" if ether_count is not None else "[E:?]"
-        print(f"[C{self.compass_count}][W{self.current_wave}/{self.max_waves}]{ether_str} {message}")
+        line = f"[C{self.compass_count}][W{self.current_wave}/{self.max_waves}]{ether_str} {message}"
+        print(line)
+        if self._log_callback:
+            self._log_callback(line)
+        if self._state_callback:
+            try:
+                self._state_callback(
+                    self.state.name, self.compass_count,
+                    self.current_wave, self.max_waves, ether_count
+                )
+            except Exception:
+                pass
+
+    # ── Instance detection ────────────────────────────────────────────────────
+
+    def is_in_compass_instance(self) -> bool:
+        """Detect whether the player is currently inside a compass instance.
+
+        Detection priority:
+          1. Template match for ``hud_instance.png`` inside INSTANCE_HUD_REGION
+             (fast, reliable — user must upload a screenshot of the wave-counter
+             icon box visible in the top-right corner).
+          2. OCR wave-counter read — if the wave counter is legible we are inside.
+          3. Minimap event-icon check — if bonehand/extrahand is visible we are
+             inside (slower, but works without any uploaded templates).
+
+        Returns True if any method confirms we are inside an instance.
+        """
+        from config import INSTANCE_HUD_REGION
+
+        # ── Method 1: template match (fast, no OCR) ──────────────────────────
+        if self.vision.variant_count("hud_instance") > 0:
+            try:
+                screen = self.vision.capture_screen()
+                x1, y1, x2, y2 = INSTANCE_HUD_REGION
+                hud_crop = screen[y1:y2, x1:x2]
+                result = self.vision.find_template(hud_crop, "hud_instance", threshold=0.50)
+                if result:
+                    _, _, conf = result
+                    self.log_status(f"[启动检测] HUD 模板匹配到副本图标 (conf={conf:.2f})")
+                    return True
+            except Exception as e:
+                print(f"[hud_instance check error] {e}")
+
+        # ── Method 2: OCR wave number ─────────────────────────────────────────
+        wave_data = self.vision.read_wave_number()
+        if isinstance(wave_data, tuple):
+            self.log_status(f"[启动检测] OCR 读到波次 {wave_data} → 已在副本")
+            return True
+        if isinstance(wave_data, str) and any(kw in wave_data for kw in ["波", "Wave", "/"]):
+            self.log_status(f"[启动检测] OCR 读到波次文本 '{wave_data}' → 已在副本")
+            return True
+
+        # ── Method 3: minimap event icon ─────────────────────────────────────
+        try:
+            minimap = self.vision.capture_minimap()
+            if (self.vision.find_template(minimap, "extrahand", threshold=MATCH_THRESHOLD) or
+                    self.vision.find_template(minimap, "bonehand", threshold=MATCH_THRESHOLD)):
+                self.log_status("[启动检测] 小地图发现事件图标 → 已在副本")
+                return True
+        except Exception as e:
+            print(f"[minimap hud check error] {e}")
+
+        return False
+
+    def _sync_state_inside_instance(self, minimap):
+        """Choose the correct starting state when we know we are already
+        inside a compass instance.  Called once during run() startup.
+
+        Decision tree:
+          1. Read wave count first (updates self.current_wave / max_waves)
+          2. Boss room / chest are only reachable after ALL waves complete →
+             only check minimap for bosshand/bossdoor/chest when waves_done
+          3. During active waves: scan for event choices or fall back to
+             navigating to the combat centre
+          4. Wave == 0 or unreadable → just entered, navigate to centre
+        """
+        # ── Step 1: read wave count first so the overlay shows the right value ──
+        wave_data = self.vision.read_wave_number()
+        curr_wave, max_wave = 0, 10
+        if isinstance(wave_data, tuple):
+            curr_wave, max_wave = wave_data
+            self.current_wave = curr_wave
+            self.max_waves = max_wave
+            self.log_status(f"[启动检测] OCR 读波次: {curr_wave}/{max_wave}")
+
+        waves_done = (curr_wave > 0 and curr_wave >= max_wave)
+
+        # ── Step 2: boss/chest only exist after all waves are complete ───────────
+        if waves_done:
+            if (self.vision.find_template(minimap, "bosshand", threshold=0.55) or
+                    self.vision.find_template(minimap, "bossdoor", threshold=0.55)):
+                self.log_status(self.get_text("sync_boss"))
+                return GameState.NAVIGATING_TO_BOSS
+            if self.vision.find_template(minimap, "chest_marker", threshold=0.55):
+                self.log_status(self.get_text("sync_chest"))
+                return GameState.NAVIGATING_TO_CHEST
+            # waves done but no boss/chest icon yet → keep navigating to centre
+            self.log_status("[启动检测] 波次已结束，等待首领房刷出...")
+            return GameState.NAVIGATING_TO_CENTER
+
+        # ── Step 3: active waves ──────────────────────────────────────────────────
+        if curr_wave > 0:
+            screen = self.vision.capture_screen()
+            text_items = self.vision.scan_screen_for_text_events(screen, roi=EVENT_SCAN_ROI)
+            found_any_event = any(self.fuzzy_match_event(it["text"]) for it in text_items)
+            if found_any_event:
+                self.log_status(self.get_text("sync_events"))
+                return GameState.SCANNING_FOR_EVENTS
+            self.log_status(self.get_text("sync_wave"))
+            return GameState.NAVIGATING_TO_CENTER
+
+        # ── Step 4: wave == 0 or unreadable ──────────────────────────────────────
+        self.log_status("[启动检测] 波次为 0 或未读到 → 副本刚进入，导航至中心")
+        return GameState.ENTERING_INSTANCE
 
     def run(self):
         """主状态机循环 - 恢复全自动化"""
+        self._running = True
+        # Read run limit from settings at startup
+        _s = load_settings()
+        self.max_runs = int(_s.get("max_runs", 0))
+        self.run_count = 0
+        self._emit_run_count()
+        self.log_status(
+            f"[RUN] 最大运行次数: {'不限' if self.max_runs == 0 else self.max_runs}"
+        )
         print(self.get_text("start_prompt"))
         time.sleep(3)
-        
-        # 初始状态同步：智能检测当前位置
-        screen = self.vision.capture_screen()
+
+        # ── Startup state sync ────────────────────────────────────────────────
+        # Primary check: are we already inside a compass instance?
+        # If yes → skip the whole inventory/key activation flow.
         minimap = self.vision.capture_minimap()
-        wave_data = self.vision.read_wave_number()
-        
-        # 1. 优先检查是否在副本波次中
-        if isinstance(wave_data, tuple) or (isinstance(wave_data, str) and (any(kw in wave_data for kw in ["波", "Wave", "/"]))):
-            text_items = self.vision.scan_screen_for_text_events(screen, roi=EVENT_SCAN_ROI)
-            found_any_event = any(self.fuzzy_match_event(it['text']) for it in text_items)
-            
-            if found_any_event:
-                self.log_status(self.get_text("sync_events"))
-                self.state = GameState.SCANNING_FOR_EVENTS
-            else:
-                self.log_status(self.get_text("sync_wave"))
-                self.state = GameState.NAVIGATING_TO_CENTER
-                
-        # 2. 检查是否在首领房入口或大门前
+
+        if self.is_in_compass_instance():
+            self.state = self._sync_state_inside_instance(minimap)
         elif self.vision.find_template(minimap, "bosshand") or self.vision.find_template(minimap, "bossdoor"):
+            # Edge case: HUD not detected but minimap shows boss area
             self.log_status(self.get_text("sync_boss"))
             self.state = GameState.NAVIGATING_TO_BOSS
-            
-        # 3. 检查是否已经在宝箱房（打完 Boss）
         elif self.vision.find_template(minimap, "chest_marker"):
             self.log_status(self.get_text("sync_chest"))
             self.state = GameState.NAVIGATING_TO_CHEST
-            
-        # 4. 默认状态：在城镇
         else:
             self.log_status(self.get_text("sync_town"))
             self.state = GameState.ACTIVATING_NEXT_COMPASS
 
-        self.current_wave = 0
-        self.max_waves = 10
+        self.current_wave = 0 if self.current_wave == 0 else self.current_wave
+        if self.max_waves == 0:
+            self.max_waves = 10
 
-        while True:
+        while self._running:
             try:
+                # Emit state to UI
+                if self._state_callback:
+                    try:
+                        self._state_callback(
+                            self.state.name, self.compass_count,
+                            self.current_wave, self.max_waves, self._last_ether
+                        )
+                    except Exception:
+                        pass
+
+                # ── Periodic quest-tracker refresh for overlay (every 5 s) ──
+                now = time.time()
+                if now - self._last_quest_refresh >= 5.0:
+                    self._last_quest_refresh = now
+                    qt = self.vision.read_quest_tracker()
+                    self._emit_quest(qt)
+
+                # ── Death check (active states only, throttled) ──────────────
+                if self.state not in (
+                    GameState.IDLE, GameState.FINISHED, GameState.DEAD,
+                    GameState.RETURNING_TO_TOWN,
+                    GameState.ACTIVATING_NEXT_COMPASS, GameState.TELEPORTING_TO_INSTANCE,
+                ):
+                    if self.check_and_handle_death():
+                        continue
+
                 # 1. 检查波次信息（仅在战斗或等待阶段）
                 if self.state in [GameState.SCANNING_FOR_EVENTS, GameState.SELECTING_EVENT, GameState.WAITING_FOR_WAVE_START, GameState.COMBAT]:
                     wave_data = self.vision.read_wave_number()
@@ -140,71 +469,122 @@ class CompassBot:
 
                 # 2. 状态机
                 if self.state == GameState.NAVIGATING_TO_CENTER:
-                    # 导航前确保鼠标在中心
                     self.nav.move_mouse_to_center()
-                    success = self.execute_return_to_center(template_name="bonehand")
+                    _nav_interrupt = {'reason': None}
+                    _nav_tick = lambda: self._priority_tick(_nav_interrupt)
+                    # No skills while navigating to center (offering phase, no mobs)
+                    success = self.execute_return_to_center(
+                        template_name="bonehand",
+                        interrupt_check=_nav_tick,
+                        cast_while_moving=False,
+                    )
+                    self._nav_to_center_reason = None
                     if success:
                         self.log_status(self.get_text("reached_center"))
                         self.state = GameState.SCANNING_FOR_EVENTS
                     else:
-                        time.sleep(1)
+                        _r = _nav_interrupt['reason']
+                        if _r == 'dead':
+                            pass  # _do_resurrect set state
+                        elif _r == 'horde_complete':
+                            self.state = GameState.NAVIGATING_TO_BOSS
+                        elif _r == 'combat':
+                            self.state = GameState.COMBAT
+                        else:
+                            # Nav timed out — proceed to scan anyway (player may
+                            # be close enough to interact with the altar)
+                            self.log_status("[NAV] 导航超时，尝试直接扫描")
+                            self.state = GameState.SCANNING_FOR_EVENTS
 
                 elif self.state == GameState.SCANNING_FOR_EVENTS:
+                    # BT check: a teammate may have selected offering already,
+                    # triggering a new combat wave while we are still scanning.
+                    # 'offering' will NOT fire here (see _priority_tick) — only
+                    # 'dead' and 'combat' are relevant from this state.
+                    _scan_interrupt = {'reason': None}
+                    if self._priority_tick(_scan_interrupt):
+                        _r = _scan_interrupt['reason']
+                        if _r == 'dead':
+                            pass
+                        elif _r == 'horde_complete':
+                            self.log_status("[SCAN] 魔潮已完成 → NAVIGATING_TO_BOSS")
+                            self.state = GameState.NAVIGATING_TO_BOSS
+                        elif _r == 'combat':
+                            self.state = GameState.COMBAT
+                        continue
                     self.nav.move_mouse_to_center()
                     time.sleep(0.5)
                     screen = self.vision.capture_screen()
-                    
-                    # 🔥 优先使用OpenCV模板匹配检测混沌事件
+
+                    # ── Pass 1: tribute icon template matching (fast, reliable) ─
+                    icon_events = self.vision.scan_tribute_icons(
+                        screen, roi=EVENT_SCAN_ROI, threshold=0.60
+                    )
+                    if icon_events:
+                        self.log_status(
+                            f"[贡品] 图标扫描找到 {len(icon_events)} 个贡品: "
+                            f"{[e['category'] for e in icon_events]}"
+                        )
+                        best_choice = self.select_best_event(icon_events)
+                        self.log_status(
+                            f"[贡品] 选择: {best_choice['name']}  "
+                            f"pos={best_choice['center']}"
+                        )
+                        self.selected_event_target = best_choice
+                        self.state = GameState.SELECTING_EVENT
+                        continue
+
+                    # ── Pass 2: OCR fallback ──────────────────────────────────
+                    # Legacy hundun template check first (fast single-template)
                     hundun_result = self.vision.find_template(screen, "hundun_event", threshold=0.7)
                     if hundun_result:
                         hundun_x, hundun_y, confidence = hundun_result
-                        self.log_status(f"🔥 [OpenCV] 优先检测到混沌事件! 位置: ({hundun_x}, {hundun_y}), 置信度: {confidence:.2f}")
-                        # 直接选择混沌事件，跳过OCR识别
+                        self.log_status(
+                            f"🔥 [OpenCV] 混沌事件模板 pos=({hundun_x},{hundun_y}) "
+                            f"conf={confidence:.2f}"
+                        )
                         self.selected_event_target = {
                             'name': self.get_text("hellborne_event_name"),
-                            'center': (hundun_x, hundun_y)
+                            'category': '混沌贡品',
+                            'center': (hundun_x, hundun_y),
                         }
                         self.state = GameState.SELECTING_EVENT
                         continue
-                    
-                    # 如果OpenCV未检测到，继续使用OCR识别
+
                     text_items = self.vision.scan_screen_for_text_events(screen, roi=EVENT_SCAN_ROI)
-                    
                     found_events = []
                     matches_output = []
                     is_boss_phase = False
-                    
+
                     for item in text_items:
                         raw_text = item['text']
                         if any(kw in raw_text for kw in ["选择", "开始", "混沌浪潮", "Select", "start", "Wave", "Offerings"]):
                             continue
-                            
-                        # 📍 关键修复：如果在扫描事件界面看到了首领入口文字，立即同步状态
                         if any(kw in raw_text for kw in ["理事会", "巴图克", "Council", "Barthuk"]):
                             self.log_status(self.get_text("boss_text_sync", raw_text))
                             self.state = GameState.SELECTING_BOSS_ENTRY
                             is_boss_phase = True
                             break
-
                         matched_name = self.fuzzy_match_event(raw_text)
                         if matched_name:
                             found_events.append({'name': matched_name, 'center': item['center']})
-                            matches_output.append(f"🌟 [MATCH] '{raw_text}' -> {matched_name} ({item['center']})")
-                    
+                            matches_output.append(
+                                f"🌟 [MATCH] '{raw_text}' -> {matched_name} ({item['center']})"
+                            )
+
                     if is_boss_phase:
-                        continue # 直接进入下一轮状态机循环处理 SELECTING_BOSS_ENTRY
-                        
+                        continue
+
                     if found_events:
                         print(self.get_text("ocr_raw_header"))
-                        for line in matches_output: print(line)
-                        
+                        for line in matches_output:
+                            print(line)
                         best_choice = self.select_best_event(found_events)
                         print(self.get_text("final_decision_header"))
                         print(self.get_text("final_decision_pick", best_choice['name']))
                         if any(kw in best_choice['name'] for kw in ['混沌', 'Offerings']):
                             print(self.get_text("aether_warning"))
                         print("-" * 30 + "\n")
-                        
                         self.selected_event_target = best_choice
                         self.state = GameState.SELECTING_EVENT
                     else:
@@ -229,60 +609,116 @@ class CompassBot:
 
                 elif self.state == GameState.COMBAT:
                     self.log_status(self.get_text("combat_start", self.current_wave, self.max_waves))
-                    # 围绕校准中心进行圆形巡逻
-                    self.nav.patrol_circular(duration=60)
+                    # Quest-driven combat: keep patrolling until "选择炼狱供奉"
+                    # (offering phase) or death is detected via _priority_tick.
+                    # No hard time limit — the BT check drives the exit condition.
+                    # A 10-minute safety cap guards against detection failures.
+                    _interrupt = {'reason': None}
+                    self.nav.patrol_until_done(
+                        event_check=lambda: self._priority_tick(_interrupt),
+                        safety_timeout=600,
+                    )
                     self.log_status(self.get_text("patrol_end"))
-                    
-                    if self.current_wave >= self.max_waves and self.max_waves > 0:
+
+                    reason = _interrupt['reason']
+                    if reason == 'dead':
+                        # _do_resurrect already set state to NAVIGATING_TO_CENTER
+                        pass
+                    elif reason == 'horde_complete':
+                        # Final offering selected — skip center nav, go straight to boss
+                        self.log_status("[COMBAT] 魔潮已完成 → NAVIGATING_TO_BOSS")
+                        self.state = GameState.NAVIGATING_TO_BOSS
+                    elif reason == 'offering' and self.current_wave >= self.max_waves and self.max_waves > 0:
                         self.log_status(self.get_text("all_waves_done"))
                         self.state = GameState.NAVIGATING_TO_BOSS
                     else:
+                        # offering detected (or safety timeout) → navigate to centre
                         self.state = GameState.NAVIGATING_TO_CENTER
 
                 elif self.state == GameState.NAVIGATING_TO_BOSS:
-                    self.log_status(self.get_text("moving_to_boss_entry"))
-                    success = self.execute_return_to_center(template_name="bosshand")
-                    if success:
-                        self.log_status(self.get_text("arrived_boss_entry"))
-                        time.sleep(1.0)
-                        self.state = GameState.SELECTING_BOSS_ENTRY
-                    else:
-                        time.sleep(1)
-
-                elif self.state == GameState.SELECTING_BOSS_ENTRY:
-                    self.nav.move_mouse_to_center()
-                    
-                    # 选择前读取以太数量
-                    ether_count = self.vision.read_ether_count()
-                    if ether_count is not None:
-                        self.log_status(self.get_text("ether_count", ether_count))
-                        # 修正判断数值：大于 1066 时选择巴图克
-                        target_text = "巴图克" if ether_count > 1066 else "理事会"
-                        if self.lang == "en":
-                            target_text = "Barthuk" if ether_count > 1066 else "Council"
-                    else:
-                        self.log_status(self.get_text("no_ether_reading"))
-                        target_text = "Barthuk" if self.lang == "en" else "巴图克" # Based on user preference or safety
-                        # The original code used "理事会", let's stick to that default
-                        target_text = "Council" if self.lang == "en" else "理事会"
-                    
-                    self.log_status(self.get_text("scanning_boss", target_text))
-                    screen = self.vision.capture_screen()
-                    text_items = self.vision.scan_screen_for_text_events(screen)
-                    
-                    target = None
-                    for item in text_items:
-                        if target_text in item['text']:
-                            target = item
-                            break
-                    
-                    if target:
-                        self.log_status(self.get_text("clicking_boss", target['text']))
-                        self.nav.click_position(target['center'])
-                        time.sleep(2)  # 减少等待时间，因为没有传送
+                    # If the horde is already complete (quest = "已击败炼狱魔潮"),
+                    # the Council offering was already chosen — bosshand icon is gone.
+                    # Skip navigation/selection and go straight to the boss door.
+                    qt = self.vision.read_quest_tracker()
+                    self._emit_quest(qt)
+                    if self.vision.check_horde_complete(qt):
+                        self.log_status(
+                            "[BOSS] 「已击败炼狱魔潮」确认，议会已选，直接前往Boss门"
+                        )
                         self.state = GameState.NAVIGATING_TO_BOSS_DOOR
                     else:
-                        time.sleep(2)
+                        self.log_status(self.get_text("moving_to_boss_entry"))
+                        _nav_intr = {'reason': None}
+                        success = self.execute_return_to_center(
+                            template_name="bosshand",
+                            interrupt_check=lambda: self._priority_tick(_nav_intr),
+                        )
+                        if success:
+                            self.log_status(self.get_text("arrived_boss_entry"))
+                            time.sleep(1.0)
+                            self.state = GameState.SELECTING_BOSS_ENTRY
+                        else:
+                            # Nav failed — re-check quest; if horde is now complete,
+                            # the player or a teammate must have selected in the
+                            # meantime → skip straight to the door.
+                            qt2 = self.vision.read_quest_tracker()
+                            self._emit_quest(qt2)
+                            if self.vision.check_horde_complete(qt2):
+                                self.log_status(
+                                    "[BOSS] 导航失败但检测到「已击败炼狱魔潮」→ 直接前往Boss门"
+                                )
+                                self.state = GameState.NAVIGATING_TO_BOSS_DOOR
+                            else:
+                                time.sleep(1)
+
+                elif self.state == GameState.SELECTING_BOSS_ENTRY:
+                    # Guard: if offering is already done, skip selection.
+                    qt = self.vision.read_quest_tracker()
+                    self._emit_quest(qt)
+                    if self.vision.check_horde_complete(qt):
+                        self.log_status(
+                            "[BOSS] 「已击败炼狱魔潮」确认，跳过议会选择 → Boss门"
+                        )
+                        self.state = GameState.NAVIGATING_TO_BOSS_DOOR
+                    else:
+                        self.nav.move_mouse_to_center()
+
+                        ether_count = self.vision.read_ether_count()
+                        if ether_count is not None:
+                            self.log_status(self.get_text("ether_count", ether_count))
+                            target_text = "巴图克" if ether_count > 1066 else "理事会"
+                            if self.lang == "en":
+                                target_text = "Barthuk" if ether_count > 1066 else "Council"
+                        else:
+                            self.log_status(self.get_text("no_ether_reading"))
+                            target_text = "Council" if self.lang == "en" else "理事会"
+
+                        self.log_status(self.get_text("scanning_boss", target_text))
+                        screen = self.vision.capture_screen()
+                        text_items = self.vision.scan_screen_for_text_events(screen)
+
+                        target = None
+                        for item in text_items:
+                            if target_text in item['text']:
+                                target = item
+                                break
+
+                        if target:
+                            self.log_status(self.get_text("clicking_boss", target['text']))
+                            self.nav.click_position(target['center'])
+                            time.sleep(2)
+                            self.state = GameState.NAVIGATING_TO_BOSS_DOOR
+                        else:
+                            # Not found on screen — check quest again in case
+                            # a teammate just completed the selection.
+                            qt2 = self.vision.read_quest_tracker()
+                            if self.vision.check_horde_complete(qt2):
+                                self.log_status(
+                                    "[BOSS] 未找到议会选项，但「已击败炼狱魔潮」→ 直接前往Boss门"
+                                )
+                                self.state = GameState.NAVIGATING_TO_BOSS_DOOR
+                            else:
+                                time.sleep(2)
 
                 elif self.state == GameState.NAVIGATING_TO_BOSS_DOOR:
                     self.log_status(self.get_text("moving_to_boss_door"))
@@ -337,65 +773,184 @@ class CompassBot:
 
                 elif self.state == GameState.BOSS_FIGHT:
                     self.log_status(self.get_text("boss_fight_start"))
+                    self.log_status("[BOSS] 向前移动进入Boss房间...")
                     self.nav.move("up", 6.0)
-                    self.log_status(self.get_text("arrived_boss_area"))
-                    
-                    start_time = time.time()
-                    while time.time() - start_time < 10:
+                    self.log_status("[BOSS] 到达Boss区域，开始战斗循环")
+
+                    BOSS_TIMEOUT = 300  # 5 min hard cap
+                    QUEST_CHECK_INTERVAL = 3.0
+                    boss_start = time.time()
+                    last_quest_check = 0.0
+                    boss_killed = False
+
+                    while self._running and (time.time() - boss_start) < BOSS_TIMEOUT:
+                        # Cast skills continuously
                         self.nav.cast_skills()
                         time.sleep(0.1)
-                    
-                    self.log_status(self.get_text("boss_fight_done"))
-                    self.state = GameState.NAVIGATING_TO_CHEST
+
+                        now = time.time()
+                        elapsed = now - boss_start
+
+                        # Quest-tracker poll every QUEST_CHECK_INTERVAL seconds
+                        if now - last_quest_check >= QUEST_CHECK_INTERVAL:
+                            last_quest_check = now
+                            quest_text = self.vision.read_quest_tracker()
+                            self._emit_quest(quest_text)
+                            self.log_status(
+                                f"[BOSS] ⏱{elapsed:.0f}s 任务状态: {quest_text!r}"
+                            )
+
+                            # P1: Boss dead — dungeon complete
+                            if self.vision.check_boss_complete(quest_text):
+                                self.log_status(
+                                    "[BOSS] ✅ 「已完成地下城」→ Boss已击败！"
+                                )
+                                boss_killed = True
+                                break
+
+                            # P2: Still in boss fight — log for visibility
+                            if any(kw in quest_text for kw in
+                                   ["击败堕落理事会", "击败", "Defeat", "Fallen Council",
+                                    "Council", "理事会"]):
+                                self.log_status(
+                                    f"[BOSS] ⚔ Boss仍存活 ({elapsed:.0f}s / {BOSS_TIMEOUT}s)"
+                                )
+                            elif quest_text:
+                                # Unexpected quest text — log it but keep fighting
+                                self.log_status(
+                                    f"[BOSS] ❓ 未识别任务文本: {quest_text!r}"
+                                )
+                            else:
+                                self.log_status(
+                                    f"[BOSS] ⚠ 任务状态未读取到 ({elapsed:.0f}s)"
+                                )
+
+                            # P3: Death during boss fight
+                            if self.check_and_handle_death():
+                                self.log_status("[BOSS] 💀 Boss战中死亡，等待复活...")
+                                break  # _do_resurrect already set state
+
+                    # Loop exited — determine reason
+                    if boss_killed:
+                        # Build ordered chest queue from user settings.
+                        # Order is ALWAYS: equipment → material → gold.
+                        # Equipment chest MUST come first (fixed 400-ether cost;
+                        # other chests drain all remaining ether).
+                        _cs = load_settings().get("chest_selection", [])
+                        self._chest_queue = [c for c in CHEST_OPEN_ORDER if c in _cs]
+                        # Default when user selected nothing → open material chest
+                        if not self._chest_queue:
+                            self._chest_queue = ["material"]
+                            self.log_status(
+                                "[BOSS] 未勾选宝箱类型，默认开材料箱"
+                            )
+                        self._chest_attempts = 0
+                        self._chest_at_base = False   # must navigate to base first
+                        self.log_status(
+                            f"[BOSS] 转换 → NAVIGATING_TO_CHEST  "
+                            f"宝箱队列（装备优先）: {self._chest_queue}"
+                        )
+                        self.state = GameState.NAVIGATING_TO_CHEST
+                    elif self.state != GameState.NAVIGATING_TO_CENTER:
+                        # Timeout or _running set to False
+                        total = time.time() - boss_start
+                        self.log_status(
+                            f"[BOSS] ⚠ 循环结束（{total:.0f}s）"
+                            f"{'超时' if total >= BOSS_TIMEOUT else '手动停止'}，"
+                            f"强制跳转 NAVIGATING_TO_CHEST"
+                        )
+                        self.state = GameState.NAVIGATING_TO_CHEST
 
                 elif self.state == GameState.NAVIGATING_TO_CHEST:
-                    self.log_status(self.get_text("moving_to_chest"))
+                    # ── Queue empty → all chests done → return to town first ─
+                    if not self._chest_queue:
+                        self.log_status("[CHEST] 宝箱队列为空 → 回城")
+                        self.state = GameState.RETURNING_TO_TOWN
+                        continue
+
+                    import config as _cfg
+                    _cfg._load_calibration()
+
+                    # ── Phase A: navigate to base point first ─────────────────
+                    # CHEST_NAV_DX/DY is the staging area between all three chests.
+                    # Every chest interaction starts and ends here.
+                    if not self._chest_at_base:
+                        self.log_status(
+                            f"[CHEST] 导航至宝箱区域基准点  "
+                            f"偏移=({_cfg.CHEST_NAV_DX:.0f},{_cfg.CHEST_NAV_DY:.0f})"
+                        )
+                        self.nav.move_mouse_to_center()
+                        ok_base = self.execute_return_to_center(
+                            template_name="chest_marker",
+                            override_dx=_cfg.CHEST_NAV_DX,
+                            override_dy=_cfg.CHEST_NAV_DY,
+                        )
+                        if ok_base:
+                            self.log_status("[CHEST] ✅ 已到达基准点")
+                            self._chest_at_base = True
+                        else:
+                            self.log_status("[CHEST] ⚠ 基准点导航失败，重试")
+                            time.sleep(1)
+                        continue   # re-enter state; now _chest_at_base may be True
+
+                    # ── Phase B: navigate from base to specific chest ──────────
+                    chest_pref = self._chest_queue[0]   # peek — pop on success/skip
+                    target_label = CHEST_LABEL_CN.get(chest_pref, chest_pref)
+
+                    if chest_pref == "equipment":
+                        _nav_dx, _nav_dy = _cfg.EQUIP_CHEST_NAV_DX, _cfg.EQUIP_CHEST_NAV_DY
+                    elif chest_pref == "material":
+                        _nav_dx, _nav_dy = _cfg.MATERIAL_CHEST_NAV_DX, _cfg.MATERIAL_CHEST_NAV_DY
+                    elif chest_pref == "gold":
+                        _nav_dx, _nav_dy = _cfg.GOLD_CHEST_NAV_DX, _cfg.GOLD_CHEST_NAV_DY
+                    else:
+                        _nav_dx, _nav_dy = _cfg.CHEST_NAV_DX, _cfg.CHEST_NAV_DY
+
+                    self.log_status(
+                        f"[CHEST] 基准点→{target_label}  "
+                        f"偏移=({_nav_dx:.0f},{_nav_dy:.0f})  "
+                        f"队列: {'→'.join(self._chest_queue)}"
+                    )
                     self.nav.move_mouse_to_center()
-                    # 使用参照物逻辑：寻找 icon_health 并将其对齐到目标偏移 (13, 109)
-                    # 109 表示图标在玩家中心下方，即人物在图标上方（宝箱前）
-                    success = self.execute_return_to_center(template_name="chest_marker")
+                    success = self.execute_return_to_center(
+                        template_name="chest_marker",
+                        override_dx=_nav_dx,
+                        override_dy=_nav_dy,
+                    )
                     if success:
-                        self.log_status(self.get_text("arrived_chest_precision"))
+                        self.log_status(
+                            f"[CHEST] ✅ 已到达 {target_label}"
+                        )
+                        self._chest_attempts = 0
                         self.state = GameState.INTERACTING_WITH_CHEST
                     else:
-                        self.log_status(self.get_text("failed_chest_alignment"))
+                        self.log_status(
+                            f"[CHEST] ⚠ 导航到 {target_label} 失败，重试"
+                        )
                         time.sleep(1)
 
                 elif self.state == GameState.INTERACTING_WITH_CHEST:
-                    self.log_status(self.get_text("searching_boss_chest"))
-                    center_x, center_y = 1280, 720
-                    
-                    trigger_pos = None
-                    pyautogui.moveTo(center_x, center_y)
-                    time.sleep(0.3)
-                    
-                    # 极速向上寻找
-                    for offset_y in range(0, 450, 40): 
-                        current_mouse_pos = (center_x, center_y - offset_y)
-                        pyautogui.moveTo(current_mouse_pos[0], current_mouse_pos[1], duration=0.02)
-                        time.sleep(0.15) 
-                        
-                        screen = self.vision.capture_screen()
-                        
-                        # 检查是否触发了宝箱悬停文字
-                        # 1. 优先模板匹配
-                        res = self.vision.find_template(screen, "tip_bosschest", threshold=0.7)
-                        # 2. OCR 备选
-                        chest_roi = (900, 100, 1660, 600)
-                        text_items = self.vision.scan_screen_for_text_events(screen, roi=chest_roi)
-                        found_by_ocr = any(kw in item['text'] for item in text_items for kw in ["强效", "Greater", "Chest", "Spoils"])
+                    # Determine target chest type from queue
+                    target_type = self._chest_queue[0] if self._chest_queue else None
+                    target_label = CHEST_LABEL_CN.get(target_type, "任意") if target_type else "任意"
 
-                        if res or found_by_ocr:
-                            # 🎯 关键改进：记录当前的鼠标位置，并按照要求向上微调 65 像素
-                            calculated_y = current_mouse_pos[1] - 65
-                            # 验证坐标有效性，防止移动到屏幕外
-                            if calculated_y < 0:
-                                calculated_y = max(0, current_mouse_pos[1] - 30)  # 如果减去65会变成负数，只减去30
-                            trigger_pos = (current_mouse_pos[0], calculated_y)
-                            # 再次验证坐标范围
-                            trigger_pos = (max(0, min(2560, trigger_pos[0])), max(0, min(1440, trigger_pos[1])))
-                            self.log_status(self.get_text("interaction_detected", trigger_pos))
-                            break
+                    # Per-type scan region
+                    import config as _cfg
+                    _cfg._load_calibration()
+                    if target_type == "equipment":
+                        _scan_region = tuple(_cfg.EQUIP_CHEST_SCAN_REGION)
+                    elif target_type == "material":
+                        _scan_region = tuple(_cfg.MATERIAL_CHEST_SCAN_REGION)
+                    elif target_type == "gold":
+                        _scan_region = tuple(_cfg.GOLD_CHEST_SCAN_REGION)
+                    else:
+                        _scan_region = (800, 150, 1760, 950)  # broad fallback
+
+                    self.log_status(
+                        f"[宝箱] 开始扫描  目标={target_label}  "
+                        f"扫描范围={_scan_region}"
+                    )
+                    trigger_pos = self._find_chest_by_type(target_type, _scan_region)
 
                     if trigger_pos:
                         self.log_status(self.get_text("executing_open"))
@@ -506,16 +1061,63 @@ class CompassBot:
                                 time.sleep(0.05)
                         
                         self.log_status("✅ 装备拾取完成（30秒时间到）")
-                        
-                        # 3. 流程结束
+
+                        # 3. 流程结束 — pop this chest from queue, go back
                         self.log_status(self.get_text("pickup_finished"))
-                        kb.press_and_release('t')
-                        # 增加缓冲时间
-                        time.sleep(8.0) 
-                        self.state = GameState.ACTIVATING_NEXT_COMPASS
+                        if self._chest_queue:
+                            done = self._chest_queue.pop(0)
+                            self.log_status(
+                                f"[CHEST] {done}箱已完成  "
+                                f"队列剩余: {self._chest_queue or '（全部完成）'}"
+                            )
+                        self._chest_attempts = 0
+
+                        if self._chest_queue:
+                            # More chests — reset to base-point phase before next
+                            self.log_status(
+                                f"[CHEST] 返回基准点，然后前往下一个宝箱 "
+                                f"{CHEST_LABEL_CN.get(self._chest_queue[0], '?')}..."
+                            )
+                            self._chest_at_base = False
+                            time.sleep(1.5)
+                            self.state = GameState.NAVIGATING_TO_CHEST
+                        else:
+                            # All chests done → go back to town then activate
+                            self.log_status("[CHEST] 所有宝箱已开完 → 回城")
+                            self.state = GameState.RETURNING_TO_TOWN
                     else:
-                        self.log_status(self.get_text("no_interaction_retry"))
-                        time.sleep(1)
+                        # Chest interaction not found — count as one attempt
+                        self._chest_attempts += 1
+                        chest_label = (
+                            self._chest_queue[0] if self._chest_queue else "unknown"
+                        )
+                        if self._chest_attempts >= self._MAX_CHEST_ATTEMPTS:
+                            skipped = (
+                                self._chest_queue.pop(0)
+                                if self._chest_queue else chest_label
+                            )
+                            self.log_status(
+                                f"[CHEST] ⚠ {skipped}箱连续 "
+                                f"{self._MAX_CHEST_ATTEMPTS} 次未找到交互点，跳过  "
+                                f"队列剩余: {self._chest_queue or '（无）'}"
+                            )
+                            self._chest_attempts = 0
+                            self._chest_at_base = False   # return to base before next
+                            self.state = GameState.NAVIGATING_TO_CHEST
+                        else:
+                            self.log_status(
+                                f"[CHEST] 未找到 {chest_label}箱交互点，"
+                                f"重试 ({self._chest_attempts}/{self._MAX_CHEST_ATTEMPTS})"
+                            )
+                            time.sleep(1)
+
+                elif self.state == GameState.RETURNING_TO_TOWN:
+                    self.log_status("[回城] 按 T 传送回城...")
+                    kb.press_and_release('t')
+                    # Wait for the town-portal loading screen to finish
+                    time.sleep(10.0)
+                    self.log_status("[回城] 已回城，准备激活下一个罗盘")
+                    self.state = GameState.ACTIVATING_NEXT_COMPASS
 
                 elif self.state == GameState.ACTIVATING_NEXT_COMPASS:
                     self.log_status(self.get_text("activating_next_compass"))
@@ -534,17 +1136,38 @@ class CompassBot:
                         time.sleep(1.0)
                         
                         screen = self.vision.capture_screen()
-                        compass = self.vision.find_template_in_region(screen, "compass", INVENTORY_REGION, threshold=0.7)
+                        compass = None
+                        for _ck in self._compass_keys:
+                            _res = self.vision.find_template_in_region(screen, _ck, INVENTORY_REGION, threshold=0.7)
+                            if _res:
+                                compass = _res
+                                self.log_status(self.get_text("compass_found", _res[:2], _res[2]) + f" [{_ck}]")
+                                break
                         if compass:
-                            self.log_status(self.get_text("compass_found", compass[:2], compass[2]))
                             pyautogui.rightClick(compass[0], compass[1])
                             time.sleep(1.5)
                             if self.handle_modal_accept("modal_usekey"):
-                                # self.log_status handled inside handle_modal_accept
-                                time.sleep(1.0)
-                                kb.press_and_release('i')
-                                time.sleep(1.0)
-                                self.state = GameState.TELEPORTING_TO_INSTANCE
+                                # Compass activated — count this as a completed run
+                                self.run_count += 1
+                                self._emit_run_count()
+                                self.log_status(
+                                    f"[RUN] 第 {self.run_count}"
+                                    + (f"/{self.max_runs}" if self.max_runs > 0 else "")
+                                    + " 次罗盘已激活"
+                                )
+                                # Check run limit
+                                if self.max_runs > 0 and self.run_count >= self.max_runs:
+                                    self.log_status(
+                                        f"[RUN] ✅ 已完成设定的 {self.max_runs} 次，自动停止"
+                                    )
+                                    kb.press_and_release('i')
+                                    time.sleep(1.0)
+                                    self._running = False
+                                else:
+                                    time.sleep(1.0)
+                                    kb.press_and_release('i')
+                                    time.sleep(1.0)
+                                    self.state = GameState.TELEPORTING_TO_INSTANCE
                             else:
                                 self.log_status(self.get_text("modal_failed"))
                                 # 保存弹窗调试图像
@@ -595,52 +1218,53 @@ class CompassBot:
 
                 elif self.state == GameState.ENTERING_INSTANCE:
                     self.log_status(self.get_text("entering_instance"))
-                    success = self.execute_return_to_center(template_name="start_icon", tolerance=10)
+                    # 副本初始区有怪物 — 先原地释放技能3秒再导航
+                    self.log_status("🗡️ 入场先清场3秒...")
+                    pre_cast_start = time.time()
+                    while time.time() - pre_cast_start < 3.0 and self._running:
+                        self.nav.cast_skills()
+                        time.sleep(0.05)
+
+                    # Navigate directly to event center using calibrated offset
+                    success = self.execute_return_to_center(
+                        template_name="bonehand",
+                        cast_while_moving=False,
+                    )
                     if success:
                         self.log_status(self.get_text("arrived_start_pos"))
-                        start_check = time.time()
-                        while time.time() - start_check < 15.0: # 等待时间缩短至 15 秒
-                            minimap = self.vision.capture_minimap()
-                            if self.vision.find_template(minimap, "bonehand", threshold=0.6) or \
-                               self.vision.find_template(minimap, "extrahand", threshold=0.6):
-                                self.log_status(self.get_text("detected_event_icon"))
-                                self.state = GameState.NAVIGATING_TO_CENTER
-                                break
-                            time.sleep(1.0)
-                        
-                        if self.state != GameState.NAVIGATING_TO_CENTER:
-                            self.log_status(self.get_text("wait_icon_timeout"))
-                            self.state = GameState.NAVIGATING_TO_CENTER
                     else:
-                        self.log_status(self.get_text("blind_move_up"))
-                        self.nav.move_while_casting("up", 3.0)
-                # 盲移后，尝试直接寻找 bonehand/extrahand
-                        minimap = self.vision.capture_minimap()
-                        if self.vision.find_template(minimap, "bonehand", threshold=0.5) or \
-                           self.vision.find_template(minimap, "extrahand", threshold=0.5):
-                            self.state = GameState.NAVIGATING_TO_CENTER
+                        self.log_status("[ENTRY] 导航到中心超时，继续扫描")
+                    # Whether nav succeeded or timed out, proceed to scanning
+                    self.state = GameState.SCANNING_FOR_EVENTS
+
+                elif self.state == GameState.DEAD:
+                    # Death was already handled in check_and_handle_death();
+                    # if we somehow land here without recovery, just wait.
+                    time.sleep(1)
 
                 elif self.state == GameState.IDLE:
                     time.sleep(1)
 
             except KeyboardInterrupt:
                 print(self.get_text("stopped_by_user"))
+                self._running = False
                 break
             except Exception as e:
                 print(self.get_text("error_occurred", e))
                 import traceback
                 traceback.print_exc()
+                self._running = False
                 break
 
     def handle_modal_accept(self, template_name, timeout=3.0):
         """扫描弹窗并点击 '接受' 按钮。"""
+        from config import MODAL_SCAN_REGION
         start_time = time.time()
-        modal_roi = (400, 600, 2160, 1200) 
         while time.time() - start_time < timeout:
             screen = self.vision.capture_screen()
             modal = self.vision.find_template(screen, template_name, threshold=0.8)
             if modal:
-                text_items = self.vision.scan_screen_for_text_events(screen, roi=modal_roi)
+                text_items = self.vision.scan_screen_for_text_events(screen, roi=MODAL_SCAN_REGION)
                 for item in text_items:
                     if any(kw in item['text'] for kw in ["接受", "Accept"]):
                         self.log_status(self.get_text("modal_accepted", item['text']))
@@ -649,9 +1273,32 @@ class CompassBot:
             time.sleep(0.3)
         return False
 
-    def execute_return_to_center(self, template_name="bonehand", verbose=False, tolerance=None):
-        """通过跟随模板图标导航到中心。到达时返回 True。"""
-        from config import CHEST_TOLERANCE
+    def execute_return_to_center(
+        self,
+        template_name="bonehand",
+        verbose=False,
+        tolerance=None,
+        interrupt_check=None,
+        override_dx=None,
+        override_dy=None,
+        cast_while_moving=True,
+    ):
+        """通过跟随模板图标导航到中心。到达时返回 True。
+
+        Parameters
+        ----------
+        interrupt_check : callable | None
+            Optional zero-argument callable (e.g. ``_priority_tick``).
+            Called every 3 nav steps.  If it returns True the navigation is
+            aborted.
+        override_dx / override_dy : float | None
+            If provided, these values replace the default target offset for
+            *template_name*.  Used by NAVIGATING_TO_CHEST to pass the
+            per-chest-type calibrated offsets without branching inside here.
+        """
+        from config import (CHEST_TOLERANCE, NAV_CENTER_DX, NAV_CENTER_DY,
+                            CHEST_NAV_DX, CHEST_NAV_DY,
+                            BOSS_DOOR_NAV_DX, BOSS_DOOR_NAV_DY)
         if tolerance is None:
             if template_name == "bossdoor":
                 tolerance = BOSS_DOOR_TOLERANCE
@@ -659,20 +1306,40 @@ class CompassBot:
                 tolerance = CHEST_TOLERANCE
             else:
                 tolerance = CENTER_TOLERANCE
-        
+
         target_dx, target_dy = 0, 0
         if template_name == "chest_marker":
-            target_dx, target_dy = 12.0, 111.0  # 校准：在宝箱处时血井图标相对于中心的位置
+            target_dx, target_dy = float(CHEST_NAV_DX), float(CHEST_NAV_DY)
         elif template_name == "bossdoor":
-            target_dx, target_dy = -3.0, -6.0  # 目标位置：图标相对于玩家中心的位置
+            target_dx, target_dy = float(BOSS_DOOR_NAV_DX), float(BOSS_DOOR_NAV_DY)
+        elif template_name in ("bonehand", "extrahand"):
+            target_dx, target_dy = float(NAV_CENTER_DX), float(NAV_CENTER_DY)
+
+        # Caller-supplied override takes priority over defaults above
+        if override_dx is not None:
+            target_dx = float(override_dx)
+        if override_dy is not None:
+            target_dy = float(override_dy)
+
+        self.log_status(
+            f"[NAV] 开始导航 template={template_name} "
+            f"target_offset=({target_dx:.0f},{target_dy:.0f}) "
+            f"tolerance={tolerance}  MAX_STEPS={MAX_STEPS}"
+        )
 
         for step in range(1, MAX_STEPS + 1):
+            if not self._running:
+                return False
+            # BT priority tick every 3 nav steps (~3-5 s interval)
+            if interrupt_check and step % 3 == 0:
+                if interrupt_check():
+                    return False
             minimap = self.vision.capture_minimap()
             icon_rel_x, icon_rel_y = None, None
-            
+
             if template_name == "chest_marker":
                 haystack_gray = cv2.cvtColor(minimap, cv2.COLOR_BGR2GRAY)
-                template = self.vision.templates.get("chest_marker")
+                template = self.vision.get_template("chest_marker")
                 if template is None: return False
                 th, tw = template.shape[:2]
                 x1, y1, _, _ = MINIMAP_REGION
@@ -680,8 +1347,9 @@ class CompassBot:
                 loc = np.where(res >= MATCH_THRESHOLD)
                 points = list(zip(*loc[::-1]))
                 if not points:
-                    # 备选方案：如果未找到血井，也许尝试宝箱图标作为备份？
-                    # 目前仅等待并重试。
+                    self.log_status(
+                        f"[NAV] [{step}/{MAX_STEPS}] chest_marker 未在小地图找到，等待..."
+                    )
                     time.sleep(0.2)
                     continue
                 
@@ -723,6 +1391,9 @@ class CompassBot:
                             mdy = (y1 + my) - PLAYER_POS[1]
                             if abs(mdx) <= tolerance and abs(mdy) <= tolerance:
                                 return True
+                    self.log_status(
+                        f"[NAV] [{step}/{MAX_STEPS}] {template_name} 未找到图标，等待..."
+                    )
                     time.sleep(0.2)
                     continue
                 
@@ -733,29 +1404,96 @@ class CompassBot:
                 x1, y1, _, _ = MINIMAP_REGION
                 abs_icon_x = x1 + icon_rel_x
                 abs_icon_y = y1 + icon_rel_y
-                
-                # 计算当前图标相对于玩家中心的偏移 (raw_dx, raw_dy)
+
                 raw_dx = abs_icon_x - PLAYER_POS[0]
                 raw_dy = abs_icon_y - PLAYER_POS[1]
-                
-                # 误差 = 当前偏移 - 理想偏移
+
+                # error = distance between current icon offset and desired offset
                 error_x = raw_dx - target_dx
                 error_y = raw_dy - target_dy
 
-                if step % 10 == 1:
-                    self.log_status(self.get_text("nav_log", f"{template_name} | Raw: {raw_dx:.1f}, {raw_dy:.1f} | Error: {error_x:.1f}, {error_y:.1f}"))
+                self.log_status(
+                    self.get_text("nav_log",
+                        f"[{step}/{MAX_STEPS}] {template_name} | "
+                        f"raw=({raw_dx:.0f},{raw_dy:.0f}) err=({error_x:.0f},{error_y:.0f})"
+                    )
+                )
 
-                # 只有当误差在容差范围内时，才认为到达
                 if abs(error_x) <= tolerance and abs(error_y) <= tolerance:
-                    self.log_status(self.get_text("nav_log", f"Reached {template_name}! (Final Error: {error_x:.1f}, {error_y:.1f})"))
-                    return True
+                    # ── Arrival confirmation ──────────────────────────────────
+                    # Wait briefly and re-verify to reject false positives caused
+                    # by the character being knocked through the target zone.
+                    time.sleep(0.4)
+                    confirm = self._read_icon_error(template_name, target_dx, target_dy)
+                    if confirm is not None:
+                        cx, cy = confirm
+                        if abs(cx) <= tolerance and abs(cy) <= tolerance:
+                            self.log_status(
+                                self.get_text("nav_log",
+                                    f"✅ 确认到达 {template_name}! "
+                                    f"(err={cx:.0f},{cy:.0f})"
+                                )
+                            )
+                            return True
+                        # Transient pass-through (e.g. knockback) — keep navigating
+                        self.log_status(
+                            self.get_text("nav_log",
+                                f"⚠ 误判到达 (被击飞?) re-err=({cx:.0f},{cy:.0f}), 继续导航"
+                            )
+                        )
+                        error_x, error_y = cx, cy
+                    # Icon lost on re-check — continue loop
 
+                # Move toward target; cast skills only during combat phases
                 if abs(error_x) > tolerance:
-                    self.nav.move("right" if error_x > 0 else "left", self.nav.calculate_duration(abs(error_x)))
+                    dur = self.nav.calculate_duration(abs(error_x))
+                    if cast_while_moving:
+                        self.nav.move_while_casting("right" if error_x > 0 else "left", dur)
+                    else:
+                        self.nav.move("right" if error_x > 0 else "left", dur)
                 if abs(error_y) > tolerance:
-                    self.nav.move("down" if error_y > 0 else "up", self.nav.calculate_duration(abs(error_y)))
-                time.sleep(0.2) 
+                    dur = self.nav.calculate_duration(abs(error_y))
+                    if cast_while_moving:
+                        self.nav.move_while_casting("down" if error_y > 0 else "up", dur)
+                    else:
+                        self.nav.move("down" if error_y > 0 else "up", dur)
+                time.sleep(0.15)
+        self.log_status(
+            f"[NAV] ⚠ 导航超时！已尝试 {MAX_STEPS} 步，template={template_name} "
+            f"target=({target_dx:.0f},{target_dy:.0f}) tolerance={tolerance}"
+        )
         return False
+
+    def _read_icon_error(
+        self,
+        template_name: str,
+        target_dx: float,
+        target_dy: float,
+    ) -> tuple[float, float] | None:
+        """Capture minimap and return (error_x, error_y) for the event icon.
+
+        Returns None if the icon cannot be found.
+        Used for arrival re-verification after the main nav loop detects it is
+        within tolerance, to guard against knockback false-positives.
+        """
+        try:
+            minimap = self.vision.capture_minimap()
+            x1, y1 = MINIMAP_REGION[0], MINIMAP_REGION[1]
+
+            result = self.vision.find_template(minimap, "extrahand", threshold=MATCH_THRESHOLD)
+            if not result:
+                result = self.vision.find_template(minimap, "bonehand", threshold=MATCH_THRESHOLD)
+            if not result and template_name not in ("bonehand", "extrahand"):
+                result = self.vision.find_template(minimap, template_name, threshold=MATCH_THRESHOLD)
+            if not result:
+                return None
+
+            rx, ry, _ = result
+            raw_dx = (x1 + rx) - PLAYER_POS[0]
+            raw_dy = (y1 + ry) - PLAYER_POS[1]
+            return (raw_dx - target_dx, raw_dy - target_dy)
+        except Exception:
+            return None
 
     def fuzzy_match_event(self, ocr_text):
         if not ocr_text: return None
@@ -770,14 +1508,182 @@ class CompassBot:
                 if clean_event[:2] in clean_text and clean_event[-1] in clean_text: return event
         return None
 
+    # ── Chest type detection ──────────────────────────────────────────────────
+
+    def _find_chest_by_type(
+        self,
+        target_type: str | None,
+        scan_region: tuple,
+    ) -> tuple | None:
+        """Upward hover-scan from screen centre to find and identify chests.
+
+        The mouse starts at the screen centre and moves upward step by step,
+        exactly as the player would manually hover over chests.  When the game
+        shows a tooltip (detected via template match OR OCR keywords) the
+        tooltip text is OCR-read to classify the chest type.
+
+        If *target_type* is None → first tooltip found is used ("any" mode).
+        If *target_type* is specified:
+          - Matching type     → return position immediately.
+          - Non-matching type → record position, nudge mouse sideways to dismiss
+                                tooltip, continue scanning upward.
+        After the full upward pass, a second pass with a slight X offset is
+        attempted so that chests at different horizontal positions are covered.
+
+        Returns (click_x, click_y) ready to press F on, or None.
+        """
+        sr_x1, sr_y1, sr_x2, sr_y2 = scan_region
+        target_label = CHEST_LABEL_CN.get(target_type, "任意") if target_type else "任意"
+
+        # ── Optional fast path: visual template match ─────────────────────────
+        if target_type and target_type in CHEST_TEMPLATE_NAMES:
+            tmpl = CHEST_TEMPLATE_NAMES[target_type]
+            if self.vision.variant_count(tmpl) > 0:
+                screen = self.vision.capture_screen()
+                res = self.vision.find_template_in_region(
+                    screen, tmpl, scan_region, threshold=0.60
+                )
+                if res:
+                    cx, cy, conf = res
+                    self.log_status(
+                        f"[宝箱] 模板快速匹配到 {target_label} ({cx},{cy}) "
+                        f"conf={conf:.2f}"
+                    )
+                    return (cx, cy)
+                self.log_status(
+                    f"[宝箱] 模板未命中，切换悬停+OCR扫描"
+                )
+
+        # ── Upward hover scan ─────────────────────────────────────────────────
+        # Scan origin: horizontal centre of scan_region, start at bottom.
+        center_x = (sr_x1 + sr_x2) // 2
+        start_y  = min(sr_y2, 780)          # don't start below 780 (HUD area)
+        end_y    = max(sr_y1, 100)          # don't scan above 100
+
+        # X offsets to try: centre first, then slight left/right nudges
+        # so chests not directly in front are still reached.
+        x_offsets = [0, -160, 160, -320, 320]
+
+        # OCR bounding box (wide to catch tooltip no matter where it renders)
+        _ocr_roi = (
+            max(0,    sr_x1 - 80),
+            max(0,    sr_y1 - 60),
+            min(2560, sr_x2 + 80),
+            min(1440, sr_y2 + 30),
+        )
+
+        found_map: dict[str, tuple] = {}  # type → click position
+
+        def _upward_pass(mx: int) -> tuple | None:
+            """Scan upward at column mx.  Returns matching click pos or None."""
+            pyautogui.moveTo(mx, start_y, duration=0.05)
+            time.sleep(0.15)
+
+            step = 35
+            for my in range(start_y, end_y, -step):
+                if not self._running:
+                    return None
+
+                pyautogui.moveTo(mx, my, duration=0.02)
+                time.sleep(0.13)
+
+                screen = self.vision.capture_screen()
+
+                # Quick trigger: template OR keyword presence
+                triggered = bool(
+                    self.vision.find_template(
+                        screen, "tip_bosschest", threshold=0.65
+                    )
+                )
+                if not triggered:
+                    items = self.vision.scan_screen_for_text_events(
+                        screen, roi=_ocr_roi
+                    )
+                    triggered = any(
+                        kw in item["text"]
+                        for item in items
+                        for kw in ["强效", "Greater", "Spoils", "战利品"]
+                    )
+
+                if not triggered:
+                    continue
+
+                # Tooltip found → full OCR to classify
+                items = self.vision.scan_screen_for_text_events(
+                    screen, roi=_ocr_roi
+                )
+                full_text = " ".join(item["text"] for item in items)
+                det_type  = identify_chest_type(full_text)
+
+                # Click position: hover point itself (F-key interaction)
+                click_pos = (
+                    mx,
+                    max(end_y, min(1440, my)),
+                )
+
+                self.log_status(
+                    f"[宝箱] 悬停 ({mx},{my})  "
+                    f"OCR={full_text[:60]!r}  "
+                    f"类型={det_type or '未识别'}"
+                )
+
+                if target_type is None or det_type == target_type:
+                    self.log_status(
+                        f"[宝箱] ✅ 目标 {target_label} @ {click_pos}"
+                    )
+                    return click_pos
+
+                # Wrong type — record, dismiss tooltip, keep going up
+                if det_type and det_type not in found_map:
+                    found_map[det_type] = click_pos
+                    wrong = CHEST_LABEL_CN.get(det_type, det_type or "?")
+                    self.log_status(
+                        f"[宝箱] 发现 {wrong}箱（非目标 {target_label}），继续向上"
+                    )
+
+                # Nudge mouse sideways briefly to dismiss tooltip
+                pyautogui.moveTo(mx + 200, my, duration=0.03)
+                time.sleep(0.10)
+                pyautogui.moveTo(mx, my - step, duration=0.02)
+
+            return None
+
+        # Try each X offset until target type is found
+        for dx in x_offsets:
+            if not self._running:
+                break
+            mx = max(sr_x1 + 40, min(sr_x2 - 40, center_x + dx))
+            result = _upward_pass(mx)
+            if result is not None:
+                return result
+
+        # ── Post-scan fallback ────────────────────────────────────────────────
+        if found_map:
+            self.log_status(
+                f"[宝箱] ⚠ 未找到目标 {target_label}，"
+                f"扫描到: "
+                f"{', '.join(CHEST_LABEL_CN.get(t,t) for t in found_map)}"
+            )
+        else:
+            self.log_status(
+                f"[宝箱] ⚠ 未扫描到任何悬停提示（扫描范围 {sr_x1}-{sr_x2}）"
+            )
+        return None
+
     def select_best_event(self, found_events):
-        if not found_events: return None
-        def get_priority(event_obj):
-            name = event_obj['name']
-            if name in self.desired_events: return self.desired_events.index(name)
-            return 999
-        found_events.sort(key=get_priority)
-        return found_events[0]
+        """Pick the best tribute using the user's category preferences.
+
+        Delegates to settings_manager.pick_tribute so that the category-filter
+        and fallback logic live in one place.
+        """
+        settings = load_settings()
+        chosen = pick_tribute(found_events, settings, self.desired_events)
+        if chosen:
+            self.log_status(
+                f"[贡品选择] 优先类别={settings.get('tribute_categories')} "
+                f"→ 选中: {chosen['name']!r}"
+            )
+        return chosen
 
     def log_door_opened(self):
         """Log door opening event to file."""

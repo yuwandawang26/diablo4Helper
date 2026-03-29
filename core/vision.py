@@ -8,13 +8,16 @@ from config import MINIMAP_REGION, WAVE_REGION, ETHER_REGION, LOGS_DIR
 
 class VisionSystem:
     def __init__(self, lang="cn", translations=None):
-        self.templates = {}
+        # Each key maps to a *list* of grayscale numpy arrays (variant templates).
+        # find_template tries all variants and returns the best match above threshold.
+        self.templates: dict[str, list] = {}
         self.lang = lang
         self.translations = translations or {}
         
         print(self.get_text("ocr_init"))
-        # 抑制详细输出
-        self.reader = easyocr.Reader(['ch_sim', 'en'], gpu=True, verbose=False) 
+        # gpu=False: CUDA is not required; avoids DLL init failures on systems
+        # without a compatible CUDA toolkit even if a GPU is present.
+        self.reader = easyocr.Reader(['ch_sim', 'en'], gpu=False, verbose=False)
         print(self.get_text("ocr_init_done"))
 
     def get_text(self, key, *args):
@@ -26,22 +29,36 @@ class VisionSystem:
                 return txt
         return txt
 
-    def load_template(self, name: str, path: Path):
-        """Loads a single template image (e.g. minimap icon)."""
+    def load_template(self, name: str, path: Path) -> bool:
+        """Load a template image and append it as a variant under *name*.
+
+        Calling this multiple times with the same *name* accumulates variants;
+        find_template will try all of them and return the best match.
+        """
         if not path.exists():
             return False
-        
+
         img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
         if img is None:
             return False
-            
+
         h, w = img.shape
-        crop = 4
         if h > 20 and w > 20:
-            img = img[crop:-crop, crop:-crop]
-            
-        self.templates[name] = img
+            img = img[4:-4, 4:-4]
+
+        if name not in self.templates:
+            self.templates[name] = []
+        self.templates[name].append(img)
         return True
+
+    def get_template(self, name: str):
+        """Return the primary (first) template array, or None."""
+        variants = self.templates.get(name)
+        return variants[0] if variants else None
+
+    def variant_count(self, name: str) -> int:
+        """Return how many variant templates are loaded for *name*."""
+        return len(self.templates.get(name, []))
 
     def capture_minimap(self):
         x1, y1, x2, y2 = MINIMAP_REGION
@@ -60,23 +77,38 @@ class VisionSystem:
         return cv2.cvtColor(np.array(pyautogui.screenshot()), cv2.COLOR_RGB2BGR)
 
     def find_template(self, haystack, template_name, threshold=0.6):
-        if template_name not in self.templates:
+        """Try ALL loaded variants for *template_name* and return the best match.
+
+        Returns (center_x, center_y, score) in haystack-local coordinates, or None.
+        """
+        variants = self.templates.get(template_name)
+        if not variants:
             return None
 
-        template = self.templates[template_name]
         haystack_gray = cv2.cvtColor(haystack, cv2.COLOR_BGR2GRAY)
 
-        res = cv2.matchTemplate(haystack_gray, template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        best_val = -1.0
+        best_loc = None
+        best_shape = None
 
-        if max_val < threshold:
+        for tmpl in variants:
+            # Skip if template is larger than haystack
+            if tmpl.shape[0] > haystack_gray.shape[0] or tmpl.shape[1] > haystack_gray.shape[1]:
+                continue
+            res = cv2.matchTemplate(haystack_gray, tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val > best_val:
+                best_val = max_val
+                best_loc = max_loc
+                best_shape = tmpl.shape[:2]
+
+        if best_val < threshold or best_loc is None:
             return None
 
-        th, tw = template.shape[:2]
-        center_x = max_loc[0] + tw // 2
-        center_y = max_loc[1] + th // 2
-        
-        return (center_x, center_y, max_val)
+        th, tw = best_shape
+        center_x = best_loc[0] + tw // 2
+        center_y = best_loc[1] + th // 2
+        return (center_x, center_y, best_val)
 
     def find_template_in_region(self, haystack, template_name, roi, threshold=0.6):
         """
@@ -138,6 +170,158 @@ class VisionSystem:
             })
             
         return detected_items
+
+    # ── Quest-tracker helpers ─────────────────────────────────────────────────
+
+    def read_quest_tracker(self) -> str:
+        """Scan QUEST_TRACKER_REGION and return all recognised lines joined with ' | '.
+
+        This is the single OCR source for all quest-related checks.
+        Callers should cache the result for the current tick rather than
+        calling multiple check_* methods independently.
+
+        The raw text is always printed so calibration issues can be spotted
+        immediately in the log.
+
+        Returns empty string on failure.
+        """
+        from config import QUEST_TRACKER_REGION
+        x1, y1, x2, y2 = QUEST_TRACKER_REGION
+        try:
+            sw, sh = pyautogui.size()
+            rx2, ry2 = min(x2, sw), min(y2, sh)
+            if rx2 <= x1 or ry2 <= y1:
+                return ""
+            shot = pyautogui.screenshot(region=(x1, y1, rx2 - x1, ry2 - y1))
+            img = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            # 2× upscale improves OCR accuracy on small game fonts
+            up = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+            results = self.reader.readtext(up, detail=0)
+            text = " | ".join(r.strip() for r in results if r.strip())
+            # Only print when text changes to avoid log flooding
+            if not hasattr(self, "_last_quest_ocr") or self._last_quest_ocr != text:
+                self._last_quest_ocr = text
+                print(f"[QUEST-OCR] region={QUEST_TRACKER_REGION}  raw={text!r}")
+            return text
+        except Exception as e:
+            print(f"[read_quest_tracker error] {e}")
+            return ""
+
+    def check_combat_quest(self, quest_text: str = "") -> bool:
+        """Return True when quest-tracker shows a COMBAT objective.
+
+        Trigger phrase: "消灭怪物" (or variants).
+        Pass an already-read quest_text to avoid a second OCR call.
+        """
+        if not quest_text:
+            quest_text = self.read_quest_tracker()
+        # Primary keyword + individual fallbacks in case OCR splits characters
+        keywords = [
+            "消灭怪物",          # exact match (preferred)
+            "消灭",              # partial — OCR may drop "怪物"
+            "怪物",              # OCR may drop "消灭"
+            "击败",              # alternate game phrasing
+            "Slay", "Kill", "Defeat",
+        ]
+        return any(kw in quest_text for kw in keywords)
+
+    def check_offering_selection(self, quest_text: str = "") -> bool:
+        """Return True when quest-tracker shows the tribute-selection phase.
+
+        Trigger phrase: "选择炼狱供奉".
+        Pass an already-read quest_text to avoid a second OCR call.
+        """
+        if not quest_text:
+            quest_text = self.read_quest_tracker()
+        # Try progressively shorter fragments so a partial OCR read still works.
+        # "炼狱供奉" is the most reliable substring; "供奉" alone is too broad.
+        keywords = [
+            "选择炼狱供奉",      # full phrase (best)
+            "炼狱供奉",          # without leading "选择"
+            "炼狱供",            # OCR may drop last char
+            "狱供奉",            # OCR may drop first char
+            "Select Infernal", "Infernal Offering",
+        ]
+        return any(kw in quest_text for kw in keywords)
+
+    def scan_tribute_icons(
+        self,
+        screen,
+        roi: tuple,
+        threshold: float = 0.60,
+    ) -> list[dict]:
+        """Template-match all uploaded tribute category icons within *roi*.
+
+        Returns a list of found tributes, each a dict:
+            {'name': <category_key>, 'category': <category_key>, 'center': (x, y)}
+
+        The 'name' and 'category' fields are the same string (e.g. "魔裔类") so
+        that the result is directly compatible with ``pick_tribute``.
+
+        Parameters
+        ----------
+        screen : np.ndarray
+            Full-screen capture (BGR).
+        roi : tuple
+            (x1, y1, x2, y2) region to search within.
+        threshold : float
+            Template-matching confidence threshold (0–1).
+        """
+        from core.settings_manager import TRIBUTE_ICON_TEMPLATES
+
+        found = []
+        for category, tmpl_name in TRIBUTE_ICON_TEMPLATES.items():
+            if self.variant_count(tmpl_name) == 0:
+                continue  # user hasn't uploaded this icon yet
+            result = self.find_template_in_region(screen, tmpl_name, roi, threshold=threshold)
+            if result:
+                cx, cy, conf = result
+                print(
+                    f"[贡品图标] ✅ {category} ({tmpl_name}) 匹配 "
+                    f"pos=({cx},{cy}) conf={conf:.2f}"
+                )
+                found.append({
+                    'name':     category,
+                    'category': category,
+                    'center':   (cx, cy),
+                })
+            else:
+                if self.variant_count(tmpl_name) > 0:
+                    print(f"[贡品图标] ✗ {category} 未匹配 (threshold={threshold})")
+        return found
+
+    def check_horde_complete(self, quest_text: str = "") -> bool:
+        """Return True when the Infernal Horde pre-boss waves are all done.
+
+        Trigger phrase: "已击败炼狱魔潮" — appears after the final (10th-wave)
+        offering is selected, signalling that the Council boss room is now open.
+        """
+        if not quest_text:
+            quest_text = self.read_quest_tracker()
+        keywords = [
+            "已击败炼狱魔潮",   # full phrase
+            "击败炼狱魔潮",     # OCR may drop "已"
+            "炼狱魔潮",         # shortest reliable fragment
+            "Defeated Infernal Horde", "Infernal Horde defeated",
+        ]
+        return any(kw in quest_text for kw in keywords)
+
+    def check_boss_complete(self, quest_text: str = "") -> bool:
+        """Return True when quest-tracker shows dungeon/boss completion.
+
+        Trigger phrase: "已完成地下城".
+        Pass an already-read quest_text to avoid a second OCR call.
+        """
+        if not quest_text:
+            quest_text = self.read_quest_tracker()
+        keywords = [
+            "已完成地下城",      # exact
+            "地下城已完成",      # alternate word order
+            "完成地下城",        # OCR may drop "已"
+            "Dungeon Complete", "dungeon complete",
+        ]
+        return any(kw in quest_text for kw in keywords)
 
     def read_wave_number(self):
         """

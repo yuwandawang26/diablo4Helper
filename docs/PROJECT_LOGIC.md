@@ -2,7 +2,7 @@
 
 | 字段 | 说明 |
 |------|------|
-| 文档版本 | 1.0 |
+| 文档版本 | 1.1 |
 | 最后同步代码 | 2026-03-29（与仓库内 `core/`、`config.py`、`main.py` 对照） |
 
 本文描述**实现层面**的流程、状态机与模块职责；面向用户的使用说明见仓库根目录 [README.md](../README.md)。
@@ -46,17 +46,22 @@
 
 ## 4. 初始状态同步（`run()` 开头）
 
-逻辑在 `agent.py` 的 `run()` 内，顺序如下：
+逻辑在 `agent.py` 的 `run()` 内，`_sync_state_inside_instance()` 决策树如下：
 
-| 条件 | 初始状态 |
-|------|-----------|
-| 波次 OCR 像「副本内」（元组 `curr/total`，或字符串含 `波` / `Wave` / `/`），且 `EVENT_SCAN_ROI` 内 OCR 能 `fuzzy_match_event` 任一条 | `SCANNING_FOR_EVENTS` |
-| 同上「像副本内」，但没有任何可匹配事件 | `NAVIGATING_TO_CENTER` |
-| 小地图匹配 `bosshand` 或 `bossdoor` | `NAVIGATING_TO_BOSS` |
-| 小地图匹配 `chest_marker`（资源为 `icon_health.png`，作血井/站位参照） | `NAVIGATING_TO_CHEST` |
-| 以上皆否（默认视为城镇） | `ACTIVATING_NEXT_COMPASS` |
+**关键原则**：首领房和宝箱只在所有波次（10/10）完成后才会出现，因此必须先读取波次，再决定是否检测首领房/宝箱图标，防止小地图误匹配。
 
-随后将 `current_wave`、`max_waves` 重置为 0 / 10（波次会在循环内由 OCR 再更新）。
+| 步骤 | 条件 | 初始状态 |
+|------|------|-----------|
+| 1 | HUD 模板 / 波次 OCR / 小地图事件图标确认在副本内 | → 进入下方决策 |
+| 2（waves_done = curr≥max） | 波次全部完成，小地图匹配 `bosshand`/`bossdoor` (threshold=0.55) | `NAVIGATING_TO_BOSS` |
+| 2 | 波次全部完成，小地图匹配 `chest_marker` | `NAVIGATING_TO_CHEST` |
+| 2 | 波次全部完成，但无上述图标 | `NAVIGATING_TO_CENTER`（等待首领房刷出） |
+| 3 | 波次进行中（curr>0，未完成），`EVENT_SCAN_ROI` 内 OCR 匹配到任意事件 | `SCANNING_FOR_EVENTS` |
+| 3 | 波次进行中（curr>0，未完成），无可匹配事件 | `NAVIGATING_TO_CENTER` |
+| 4 | 波次为 0 或未读到 | `ENTERING_INSTANCE` |
+| — | 以上皆否（未检测到副本内，默认城镇） | `ACTIVATING_NEXT_COMPASS` |
+
+同步完成后，`current_wave`/`max_waves` 已由 OCR 更新；若仍为 0 则保留默认值 0/10（循环内 OCR 会持续刷新）。
 
 ---
 

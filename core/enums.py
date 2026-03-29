@@ -15,7 +15,9 @@ class GameState(Enum):
     BOSS_FIGHT = auto()             # Boss战
     NAVIGATING_TO_CHEST = auto()    # 寻找并前往宝箱（通过参照物）
     INTERACTING_WITH_CHEST = auto() # 交互并开启宝箱
+    RETURNING_TO_TOWN = auto()      # 按 T 回城，等待加载完成
     ACTIVATING_NEXT_COMPASS = auto() # 开启下一个罗盘
     TELEPORTING_TO_INSTANCE = auto() # 传送至副本
     ENTERING_INSTANCE = auto()      # 进入副本并前往中心
+    DEAD = auto()                   # 角色死亡，等待复活
     FINISHED = auto()               # 脚本结束

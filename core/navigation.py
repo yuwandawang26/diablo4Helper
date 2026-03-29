@@ -1,12 +1,43 @@
 import time
+import json
 import keyboard as kb
 import pyautogui
 import random
+from pathlib import Path
+from core.settings_manager import load_settings, resolve_direction
 
 class NavigationSystem:
     def __init__(self, lang="cn", translations=None):
         self.lang = lang
         self.translations = translations or {}
+        self.running_check = None  # callable() -> bool; set by agent to allow clean stop
+        self._skills_last_cast: dict = {}
+        self._load_skills()
+
+    def _key(self, direction: str) -> str:
+        """Resolve a logical direction ('up','down','left','right') to the
+        actual keyboard key configured in settings (arrows or WASD)."""
+        scheme = load_settings().get("move_keys", "arrows")
+        return resolve_direction(direction, scheme)
+
+    def _load_skills(self):
+        """Load skill config from config/skills.json."""
+        skills_path = Path(__file__).parent.parent / "config" / "skills.json"
+        try:
+            with open(skills_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.skills = data.get("skills", [])
+        except Exception:
+            self.skills = [
+                {"id": 0, "key": "2", "interval": 0.25, "enabled": True},
+                {"id": 1, "key": "3", "interval": 0.25, "enabled": True},
+                {"id": 2, "key": "4", "interval": 0.25, "enabled": True},
+            ]
+
+    def reload_skills(self):
+        """Hot-reload skills config (called after UI edits)."""
+        self._load_skills()
+        self._skills_last_cast.clear()
 
     def get_text(self, key, *args):
         txt = self.translations.get(key, key)
@@ -19,9 +50,10 @@ class NavigationSystem:
 
     def move(self, direction: str, duration: float):
         """Presses a key for a specific duration."""
-        kb.press(direction)
+        key = self._key(direction)
+        kb.press(key)
         time.sleep(duration)
-        kb.release(direction)
+        kb.release(key)
         time.sleep(0.1)
 
     def move_mouse_to_center(self):
@@ -55,24 +87,100 @@ class NavigationSystem:
         return 0.04
 
     def cast_skills(self):
-        """Helper to cast skills quickly."""
-        for skill_key in ['2', '3', '4']:
-            kb.press(skill_key)
-            kb.release(skill_key)
-            time.sleep(0.02) 
+        """Cast each skill when its individual cooldown interval has elapsed."""
+        now = time.time()
+        for skill in self.skills:
+            if not skill.get("enabled", True):
+                continue
+            sid = skill.get("id", skill.get("key", "?"))
+            last = self._skills_last_cast.get(sid, 0)
+            if now - last >= skill.get("interval", 0.25):
+                key = skill.get("key", "")
+                if key:
+                    kb.press(key)
+                    kb.release(key)
+                    self._skills_last_cast[sid] = now
 
     def move_while_casting(self, direction, duration):
-        """Moves in a direction while spamming skills."""
-        kb.press(direction)
+        """Moves in a direction while casting skills with per-skill intervals."""
+        key = self._key(direction)
+        kb.press(key)
         start = time.time()
         while time.time() - start < duration:
+            if self.running_check and not self.running_check():
+                break
             self.cast_skills()
-            time.sleep(0.1)
-        kb.release(direction)
+            time.sleep(0.05)
+        kb.release(key)
 
-    def patrol_circular(self, duration=50):
+    def patrol_until_done(self, event_check=None, safety_timeout=600):
+        """Quest-driven patrol: runs until event_check() returns True or
+        safety_timeout seconds elapse.  No fixed duration — the caller's
+        event_check decides when combat is over.
+
+        Parameters
+        ----------
+        event_check : callable
+            Called at the end of each patrol cycle (~3-4 s each).  Returning
+            True stops the patrol immediately.
+        safety_timeout : float
+            Hard cap in seconds to avoid an infinite loop if OCR fails.
         """
-        按顺序在 4 个象限巡逻，但半径更紧凑。
+        print(self.get_text("patrol_start", safety_timeout))
+        start_time = time.time()
+
+        quadrants = [
+            ('up',    'down'),
+            ('right', 'left'),
+            ('down',  'up'),
+            ('left',  'right'),
+        ]
+        current_quad_idx = 0
+
+        while True:
+            if self.running_check and not self.running_check():
+                break
+            if time.time() - start_time >= safety_timeout:
+                print(f"[Patrol] 安全超时 {safety_timeout}s，退出巡逻")
+                break
+            if event_check and event_check():
+                print("[Patrol] 任务完成信号，退出巡逻")
+                break
+
+            move_out_dir, move_back_dir = quadrants[current_quad_idx % 4]
+            current_quad_idx += 1
+
+            self.move_while_casting(move_out_dir, 0.8)
+
+            wiggle_start = time.time()
+            while time.time() - wiggle_start < 2.5:
+                if self.running_check and not self.running_check():
+                    break
+                if time.time() - start_time >= safety_timeout:
+                    break
+                if event_check and event_check():
+                    break
+                rand_dir = random.choice(['up', 'down', 'left', 'right'])
+                self.move_while_casting(rand_dir, 0.25)
+
+            if event_check and event_check():
+                print("[Patrol] 任务完成信号，退出巡逻")
+                break
+
+            self.move_while_casting(move_back_dir, 0.8)
+
+        print(self.get_text("patrol_end"))
+
+    def patrol_circular(self, duration=50, event_check=None):
+        """按顺序在 4 个象限巡逻，但半径更紧凑。
+
+        Parameters
+        ----------
+        duration : float
+            Maximum patrol time in seconds.
+        event_check : callable | None
+            Optional zero-argument callable.  When it returns True the patrol
+            stops immediately (e.g. offering-selection phase detected).
         """
         print(self.get_text("patrol_start", duration))
         start_time = time.time()
@@ -87,25 +195,35 @@ class NavigationSystem:
         current_quad_idx = 0
         
         while time.time() - start_time < duration:
+            if self.running_check and not self.running_check():
+                break
+            if event_check and event_check():
+                print("[Patrol] 贡品选择阶段已检测到，提前结束巡逻")
+                break
             move_out_dir, move_back_dir = quadrants[current_quad_idx % 4]
             current_quad_idx += 1
-            
-            # 1. 向外移动（减小半径）
-            # 原为 1.5s，现为 0.8s 以避免撞墙
+
             self.move_while_casting(move_out_dir, 0.8)
-            
-            # 2. 扭动/战斗（短时间）
+
             wiggle_start = time.time()
-            while time.time() - wiggle_start < 2.5: # 从 4.0s 减小
-                if time.time() - start_time >= duration: break
-                
-                # 随机小步移动
+            while time.time() - wiggle_start < 2.5:
+                if time.time() - start_time >= duration:
+                    break
+                if self.running_check and not self.running_check():
+                    break
+                if event_check and event_check():
+                    break
                 rand_dir = random.choice(['up', 'down', 'left', 'right'])
                 self.move_while_casting(rand_dir, 0.25)
-            
-            if time.time() - start_time >= duration: break
 
-            # 3. 向后移动（与向外移动时间相同，以返回中心）
+            if time.time() - start_time >= duration:
+                break
+            if self.running_check and not self.running_check():
+                break
+            if event_check and event_check():
+                print("[Patrol] 贡品选择阶段已检测到，提前结束巡逻")
+                break
+
             self.move_while_casting(move_back_dir, 0.8)
             
         print(self.get_text("patrol_end"))
