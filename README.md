@@ -51,6 +51,7 @@ https://www.youtube.com/watch?v=ChkpE48jsJg
 *   `core/navigation.py`: 导航与操作执行（移动、技能、拾取）/ Navigation and operation execution (movement, skills, looting)
 *   `config.py`: 全局配置（ROI 区域、资产路径、优先级列表等）/ Global configuration (ROI regions, asset paths, priority lists, etc.)
 *   `verify_*.py`: 各个环节的独立测试与视觉化调试脚本 / Independent testing and visualization debug scripts for each stage
+*   `docs/PROJECT_LOGIC.md`: **实现级**项目逻辑、状态机与行为动线（改核心逻辑时请同步更新）/ Implementation-level logic, state machine, and behavior flows (keep in sync when changing core code)
 
 ## 游戏设置要求 / Game Settings Requirements
 
