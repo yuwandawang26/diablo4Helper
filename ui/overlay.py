@@ -233,9 +233,10 @@ class OverlayWindow(QWidget):
         self._lbl_compass.setText(f"#{compass}")
         self._lbl_wave.setText(f"{wave_curr}/{wave_max}")
         self._lbl_ether.setText(ether)
-        # Combat badge
-        if state == "COMBAT":
-            self._lbl_combat.setText("⚔ 战斗中")
+        # Combat badge — active during wave combat and boss fight
+        if state in ("COMBAT", "BOSS_FIGHT"):
+            label = "⚔ Boss战" if state == "BOSS_FIGHT" else "⚔ 战斗中"
+            self._lbl_combat.setText(label)
             self._lbl_combat.setStyleSheet(
                 "font-size: 11px; font-weight: bold; color: #ff6060; background: transparent; "
                 "padding: 1px 5px; border-radius: 3px;"

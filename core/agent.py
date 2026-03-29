@@ -14,6 +14,7 @@ from config import (
     EQUIP_CHEST_NAV_DX, EQUIP_CHEST_NAV_DY, EQUIP_CHEST_SCAN_REGION,
     MATERIAL_CHEST_NAV_DX, MATERIAL_CHEST_NAV_DY, MATERIAL_CHEST_SCAN_REGION,
     GOLD_CHEST_NAV_DX, GOLD_CHEST_NAV_DY, GOLD_CHEST_SCAN_REGION,
+    BOSS_DOOR_SCAN_REGION,
 )
 from core.vision import VisionSystem
 from core.navigation import NavigationSystem
@@ -227,7 +228,7 @@ class CompassBot:
         quest_text = self.vision.read_quest_tracker()
         self._emit_quest(quest_text)
 
-        # P2 ── Horde complete — detectable from any non-boss state.
+        # P2 ── Horde complete — detectable from any pre-boss state.
         # "已击败炼狱魔潮" means the final offering was chosen; go to boss room.
         _horde_states = (
             GameState.COMBAT, GameState.NAVIGATING_TO_CENTER,
@@ -237,8 +238,20 @@ class CompassBot:
         if self.state in _horde_states and self.vision.check_horde_complete(quest_text):
             if not getattr(self, "_bt_last_reason", None) == "horde_complete":
                 self._bt_last_reason = "horde_complete"
-                self.log_status("[BT-P2] 「已击败炼狱魔潮」→ 最终供奉完成，前往 Boss 房")
+                self.log_status("[BT-P2] 「已击败炼狱魔潮」→ 最终供奉完成，直接前往议会大门")
             interrupt['reason'] = 'horde_complete'
+            return True
+
+        # P2b ── Final choice quest visible — navigate to selection altar.
+        _pre_boss_states = (
+            GameState.COMBAT, GameState.NAVIGATING_TO_CENTER,
+            GameState.SCANNING_FOR_EVENTS,
+        )
+        if self.state in _pre_boss_states and self.vision.check_final_choice(quest_text):
+            if not getattr(self, "_bt_last_reason", None) == "final_choice":
+                self._bt_last_reason = "final_choice"
+                self.log_status("[BT-P2b] 「做出你最终选择」→ NAVIGATING_TO_BOSS")
+            interrupt['reason'] = 'final_choice'
             return True
 
         # P3 ── Offering-selection phase — only meaningful while in COMBAT.
@@ -335,18 +348,23 @@ class CompassBot:
         return False
 
     def _sync_state_inside_instance(self, minimap):
-        """Choose the correct starting state when we know we are already
-        inside a compass instance.  Called once during run() startup.
+        """Choose the correct starting state when already inside a compass
+        instance.  Called once during run() startup.
 
-        Decision tree:
-          1. Read wave count first (updates self.current_wave / max_waves)
-          2. Boss room / chest are only reachable after ALL waves complete →
-             only check minimap for bosshand/bossdoor/chest when waves_done
-          3. During active waves: scan for event choices or fall back to
-             navigating to the combat centre
-          4. Wave == 0 or unreadable → just entered, navigate to centre
+        Quest status is the authoritative source of truth.  Wave-count and
+        minimap templates are only used as tie-breakers when the quest text
+        does not give a clear answer.
+
+        Quest → State mapping
+        ─────────────────────────────────────────────────────────────────
+        已完成地下城          boss killed → NAVIGATING_TO_CHEST
+        已击败炼狱魔潮        final offering chosen → NAVIGATING_TO_BOSS
+        击败堕落理事会/巴图克  boss arena active → BOSS_FIGHT
+        选择炼狱供奉          offering phase → NAVIGATING_TO_CENTER
+        消灭怪物              combat phase → COMBAT (or NAVIGATING_TO_CENTER)
+        (unknown/empty)       fall back to wave-count heuristic
         """
-        # ── Step 1: read wave count first so the overlay shows the right value ──
+        # ── Step 1: update wave counter for the overlay ──────────────────────────
         wave_data = self.vision.read_wave_number()
         curr_wave, max_wave = 0, 10
         if isinstance(wave_data, tuple):
@@ -355,9 +373,50 @@ class CompassBot:
             self.max_waves = max_wave
             self.log_status(f"[启动检测] OCR 读波次: {curr_wave}/{max_wave}")
 
+        # ── Step 2: read quest — this is authoritative ───────────────────────────
+        qt = self.vision.read_quest_tracker()
+        self._emit_quest(qt)
+        self.log_status(f"[启动检测] 任务状态: {qt!r}")
+
+        # Dungeon complete — chest phase
+        if self.vision.check_boss_complete(qt):
+            self.log_status("[启动检测] 「已完成地下城」→ NAVIGATING_TO_CHEST")
+            return GameState.NAVIGATING_TO_CHEST
+
+        # All waves done, offering selected — skip altar nav, go straight to boss door
+        if self.vision.check_horde_complete(qt):
+            self.log_status("[启动检测] 「已击败炼狱魔潮」→ NAVIGATING_TO_BOSS_DOOR")
+            return GameState.NAVIGATING_TO_BOSS_DOOR
+
+        # Final choice quest visible — still need to navigate to the altar
+        if self.vision.check_final_choice(qt):
+            self.log_status("[启动检测] 「做出你最终选择」→ NAVIGATING_TO_BOSS")
+            return GameState.NAVIGATING_TO_BOSS
+
+        # Boss fight in progress
+        if self.vision.check_boss_fight(qt):
+            self.log_status("[启动检测] 「击败理事会/巴图克」→ BOSS_FIGHT")
+            return GameState.BOSS_FIGHT
+
+        # Offering selection phase — go to centre
+        if self.vision.check_offering_selection(qt):
+            self.log_status("[启动检测] 「选择炼狱供奉」→ NAVIGATING_TO_CENTER")
+            return GameState.NAVIGATING_TO_CENTER
+
+        # Combat phase — check if offering UI is on screen already
+        if self.vision.check_combat_quest(qt):
+            screen = self.vision.capture_screen()
+            text_items = self.vision.scan_screen_for_text_events(screen, roi=EVENT_SCAN_ROI)
+            if any(self.fuzzy_match_event(it["text"]) for it in text_items):
+                self.log_status("[启动检测] 「消灭怪物」但贡品UI已显示 → SCANNING_FOR_EVENTS")
+                return GameState.SCANNING_FOR_EVENTS
+            self.log_status("[启动检测] 「消灭怪物」→ COMBAT")
+            return GameState.COMBAT
+
+        # ── Step 3: quest unclear — fall back to wave count ──────────────────────
+        self.log_status("[启动检测] 任务状态不明确，回退到波次判断")
         waves_done = (curr_wave > 0 and curr_wave >= max_wave)
 
-        # ── Step 2: boss/chest only exist after all waves are complete ───────────
         if waves_done:
             if (self.vision.find_template(minimap, "bosshand", threshold=0.55) or
                     self.vision.find_template(minimap, "bossdoor", threshold=0.55)):
@@ -366,23 +425,15 @@ class CompassBot:
             if self.vision.find_template(minimap, "chest_marker", threshold=0.55):
                 self.log_status(self.get_text("sync_chest"))
                 return GameState.NAVIGATING_TO_CHEST
-            # waves done but no boss/chest icon yet → keep navigating to centre
-            self.log_status("[启动检测] 波次已结束，等待首领房刷出...")
+            self.log_status("[启动检测] 波次已结束，前往中心等待...")
             return GameState.NAVIGATING_TO_CENTER
 
-        # ── Step 3: active waves ──────────────────────────────────────────────────
         if curr_wave > 0:
-            screen = self.vision.capture_screen()
-            text_items = self.vision.scan_screen_for_text_events(screen, roi=EVENT_SCAN_ROI)
-            found_any_event = any(self.fuzzy_match_event(it["text"]) for it in text_items)
-            if found_any_event:
-                self.log_status(self.get_text("sync_events"))
-                return GameState.SCANNING_FOR_EVENTS
-            self.log_status(self.get_text("sync_wave"))
+            self.log_status(f"[启动检测] 波次 {curr_wave}/{max_wave} → NAVIGATING_TO_CENTER")
             return GameState.NAVIGATING_TO_CENTER
 
-        # ── Step 4: wave == 0 or unreadable ──────────────────────────────────────
-        self.log_status("[启动检测] 波次为 0 或未读到 → 副本刚进入，导航至中心")
+        # Wave 0 / unreadable → fresh entry
+        self.log_status("[启动检测] 波次为 0 → ENTERING_INSTANCE")
         return GameState.ENTERING_INSTANCE
 
     def run(self):
@@ -487,6 +538,10 @@ class CompassBot:
                         if _r == 'dead':
                             pass  # _do_resurrect set state
                         elif _r == 'horde_complete':
+                            self.log_status("[NAV] 「已击败炼狱魔潮」→ NAVIGATING_TO_BOSS_DOOR")
+                            self.state = GameState.NAVIGATING_TO_BOSS_DOOR
+                        elif _r == 'final_choice':
+                            self.log_status("[NAV] 「做出你最终选择」→ NAVIGATING_TO_BOSS")
                             self.state = GameState.NAVIGATING_TO_BOSS
                         elif _r == 'combat':
                             self.state = GameState.COMBAT
@@ -507,7 +562,10 @@ class CompassBot:
                         if _r == 'dead':
                             pass
                         elif _r == 'horde_complete':
-                            self.log_status("[SCAN] 魔潮已完成 → NAVIGATING_TO_BOSS")
+                            self.log_status("[SCAN] 「已击败炼狱魔潮」→ NAVIGATING_TO_BOSS_DOOR")
+                            self.state = GameState.NAVIGATING_TO_BOSS_DOOR
+                        elif _r == 'final_choice':
+                            self.log_status("[SCAN] 「做出你最终选择」→ NAVIGATING_TO_BOSS")
                             self.state = GameState.NAVIGATING_TO_BOSS
                         elif _r == 'combat':
                             self.state = GameState.COMBAT
@@ -625,8 +683,10 @@ class CompassBot:
                         # _do_resurrect already set state to NAVIGATING_TO_CENTER
                         pass
                     elif reason == 'horde_complete':
-                        # Final offering selected — skip center nav, go straight to boss
-                        self.log_status("[COMBAT] 魔潮已完成 → NAVIGATING_TO_BOSS")
+                        self.log_status("[COMBAT] 「已击败炼狱魔潮」→ NAVIGATING_TO_BOSS_DOOR")
+                        self.state = GameState.NAVIGATING_TO_BOSS_DOOR
+                    elif reason == 'final_choice':
+                        self.log_status("[COMBAT] 「做出你最终选择」→ NAVIGATING_TO_BOSS")
                         self.state = GameState.NAVIGATING_TO_BOSS
                     elif reason == 'offering' and self.current_wave >= self.max_waves and self.max_waves > 0:
                         self.log_status(self.get_text("all_waves_done"))
@@ -636,40 +696,27 @@ class CompassBot:
                         self.state = GameState.NAVIGATING_TO_CENTER
 
                 elif self.state == GameState.NAVIGATING_TO_BOSS:
-                    # If the horde is already complete (quest = "已击败炼狱魔潮"),
-                    # the Council offering was already chosen — bosshand icon is gone.
-                    # Skip navigation/selection and go straight to the boss door.
-                    qt = self.vision.read_quest_tracker()
-                    self._emit_quest(qt)
-                    if self.vision.check_horde_complete(qt):
-                        self.log_status(
-                            "[BOSS] 「已击败炼狱魔潮」确认，议会已选，直接前往Boss门"
-                        )
-                        self.state = GameState.NAVIGATING_TO_BOSS_DOOR
+                    # Navigate to the bosshand altar so the player can choose the Council.
+                    # "已击败炼狱魔潮" will never arrive here (redirected to
+                    # NAVIGATING_TO_BOSS_DOOR earlier), so we always try bosshand nav.
+                    self.log_status(self.get_text("moving_to_boss_entry"))
+                    _nav_intr = {'reason': None}
+                    success = self.execute_return_to_center(
+                        template_name="bosshand",
+                        interrupt_check=lambda: self._priority_tick(_nav_intr),
+                        cast_while_moving=False,
+                    )
+                    if success:
+                        self.log_status(self.get_text("arrived_boss_entry"))
+                        time.sleep(1.0)
+                        self.state = GameState.SELECTING_BOSS_ENTRY
                     else:
-                        self.log_status(self.get_text("moving_to_boss_entry"))
-                        _nav_intr = {'reason': None}
-                        success = self.execute_return_to_center(
-                            template_name="bosshand",
-                            interrupt_check=lambda: self._priority_tick(_nav_intr),
-                        )
-                        if success:
-                            self.log_status(self.get_text("arrived_boss_entry"))
-                            time.sleep(1.0)
-                            self.state = GameState.SELECTING_BOSS_ENTRY
+                        _r2 = _nav_intr.get('reason')
+                        if _r2 == 'horde_complete':
+                            self.log_status("[BOSS] 导航中检测到「已击败炼狱魔潮」→ NAVIGATING_TO_BOSS_DOOR")
+                            self.state = GameState.NAVIGATING_TO_BOSS_DOOR
                         else:
-                            # Nav failed — re-check quest; if horde is now complete,
-                            # the player or a teammate must have selected in the
-                            # meantime → skip straight to the door.
-                            qt2 = self.vision.read_quest_tracker()
-                            self._emit_quest(qt2)
-                            if self.vision.check_horde_complete(qt2):
-                                self.log_status(
-                                    "[BOSS] 导航失败但检测到「已击败炼狱魔潮」→ 直接前往Boss门"
-                                )
-                                self.state = GameState.NAVIGATING_TO_BOSS_DOOR
-                            else:
-                                time.sleep(1)
+                            time.sleep(1)
 
                 elif self.state == GameState.SELECTING_BOSS_ENTRY:
                     # Guard: if offering is already done, skip selection.
@@ -723,7 +770,7 @@ class CompassBot:
                 elif self.state == GameState.NAVIGATING_TO_BOSS_DOOR:
                     self.log_status(self.get_text("moving_to_boss_door"))
                     self.nav.move_mouse_to_center()
-                    success = self.execute_return_to_center(template_name="bossdoor")
+                    success = self.execute_return_to_center(template_name="bossdoor", cast_while_moving=False)
                     if success:
                         self.log_status(self.get_text("arrived_boss_door"))
                         self.state = GameState.INTERACTING_WITH_BOSS_DOOR
@@ -738,8 +785,7 @@ class CompassBot:
                     
                     screen = self.vision.capture_screen()
                     # 扩大 ROI 以覆盖更多屏幕上部
-                    # 从 y=100 到 y=720 (中心)，全宽度
-                    interaction_roi = (0, 100, 2560, 720)
+                    interaction_roi = BOSS_DOOR_SCAN_REGION
                     text_items = self.vision.scan_screen_for_text_events(screen, roi=interaction_roi)
                     
                     # 调试：如果未匹配到任何内容，记录发现的内容
@@ -1281,7 +1327,7 @@ class CompassBot:
         interrupt_check=None,
         override_dx=None,
         override_dy=None,
-        cast_while_moving=True,
+        cast_while_moving=False,
     ):
         """通过跟随模板图标导航到中心。到达时返回 True。
 

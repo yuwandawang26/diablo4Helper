@@ -82,12 +82,16 @@ MODAL_SCAN_REGION = (400, 600, 2160, 1200)
 # wave-counter / timer rows — move it downward via the calibration tool.
 QUEST_TRACKER_REGION = (1850, 420, 2540, 810)
 
+# Screen region where "议会大门" interaction prompt / bossdoor text is searched.
+# Covers the upper half of the screen where door prompts typically appear.
+BOSS_DOOR_SCAN_REGION = (0, 100, 2560, 900)
+
 # Vision Parameters
 MATCH_THRESHOLD = 0.40
 EVENT_MATCH_THRESHOLD = 0.80
-CENTER_TOLERANCE = 15
-BOSS_DOOR_TOLERANCE = 15
-CHEST_TOLERANCE = 15
+CENTER_TOLERANCE = 8
+BOSS_DOOR_TOLERANCE = 8
+CHEST_TOLERANCE = 8
 
 # Navigation Limits
 MAX_STEPS = 50
@@ -102,6 +106,7 @@ def _load_calibration():
     global WAVE_REGION, ETHER_REGION, INVENTORY_REGION, EVENT_SCAN_ROI
     global INSTANCE_HUD_REGION, DEATH_SCAN_REGION, MODAL_SCAN_REGION, QUEST_TRACKER_REGION
     global CENTER_TOLERANCE, BOSS_DOOR_TOLERANCE, CHEST_TOLERANCE, MATCH_THRESHOLD
+    global BOSS_DOOR_SCAN_REGION
     if not CALIBRATION_PATH.exists():
         return
     try:
@@ -137,6 +142,8 @@ def _load_calibration():
             INVENTORY_REGION = tuple(cal["inventory_region"])
         if "quest_tracker_region" in cal:
             QUEST_TRACKER_REGION = tuple(cal["quest_tracker_region"])
+        if "boss_door_scan_region" in cal:
+            BOSS_DOOR_SCAN_REGION = tuple(cal["boss_door_scan_region"])
         if "chest_nav_dx" in cal:
             CHEST_NAV_DX = float(cal["chest_nav_dx"])
         if "chest_nav_dy" in cal:

@@ -661,6 +661,7 @@ class MainWindow(QMainWindow):
         left_layout.setSpacing(6)
         left_layout.addWidget(self._make_skill_panel())
         splitter.addWidget(left)
+        self._left_panel = left          # keep reference for show/hide
 
         # ── Right panel: templates + logs tabs ──
         right = QWidget()
@@ -1330,6 +1331,12 @@ class MainWindow(QMainWindow):
                     "quest_tracker_region", [1850, 420, 2540, 810],
                     "贡品任务栏区域  ·  框住右侧任务目标「选择炼狱供奉」文字出现的条带",
                     "_cal_quest")
+        _region_row("议会大门交互区域  (BOSS_DOOR_SCAN_REGION)\n"
+                    "  框住「议会大门 / Council Gate」交互提示文字可能出现的屏幕区域\n"
+                    "  机器人在此区域内扫描可交互的大门文字，找到后点击进入Boss战",
+                    "boss_door_scan_region", [0, 100, 2560, 900],
+                    "议会大门扫描区域  ·  框住Boss房门交互提示出现的范围",
+                    "_cal_boss_door_scan")
 
         layout.addWidget(dr_group)
 
@@ -1675,6 +1682,7 @@ class MainWindow(QMainWindow):
             "event_scan_roi":      [s.value() for s in self._cal_event],
             "inventory_region":    [s.value() for s in self._cal_inv],
             "quest_tracker_region": [s.value() for s in self._cal_quest],
+            "boss_door_scan_region": [s.value() for s in self._cal_boss_door_scan],
         }
         CALIBRATION_PATH.parent.mkdir(exist_ok=True)
         with open(CALIBRATION_PATH, "w", encoding="utf-8") as f:
@@ -2037,7 +2045,6 @@ class MainWindow(QMainWindow):
         self._btn_start.setEnabled(True)
         self._btn_start.setProperty("running", running)
         self._btn_start.setText("⏸  暂停  F1" if running else "▶  开始  F1")
-        # Force style refresh
         self._btn_start.style().unpolish(self._btn_start)
         self._btn_start.style().polish(self._btn_start)
 
@@ -2047,6 +2054,14 @@ class MainWindow(QMainWindow):
         )
         if running:
             self._overlay.set_running(True)
+
+        # Hide the entire window while running; restore when paused/stopped.
+        if running:
+            self.hide()
+        else:
+            self.show()
+            self.raise_()
+            self.activateWindow()
 
     # ── Overlay ───────────────────────────────────────────────────────────────
 

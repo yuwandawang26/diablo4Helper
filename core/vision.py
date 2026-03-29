@@ -296,14 +296,49 @@ class VisionSystem:
 
         Trigger phrase: "已击败炼狱魔潮" — appears after the final (10th-wave)
         offering is selected, signalling that the Council boss room is now open.
+
+        NOTE: Do NOT use "炼狱魔潮" alone — that is the dungeon name and appears
+        in every quest line for this activity (e.g. "炼狱魔潮 | 选择炼狱供奉").
+        Only match when the "击败" (defeat) verb is present.
         """
         if not quest_text:
             quest_text = self.read_quest_tracker()
         keywords = [
-            "已击败炼狱魔潮",   # full phrase
-            "击败炼狱魔潮",     # OCR may drop "已"
-            "炼狱魔潮",         # shortest reliable fragment
+            "已击败炼狱魔潮",          # full phrase with "已"
+            "击败炼狱魔潮",            # OCR may drop the leading "已"
             "Defeated Infernal Horde", "Infernal Horde defeated",
+        ]
+        return any(kw in quest_text for kw in keywords)
+
+    def check_final_choice(self, quest_text: str = "") -> bool:
+        """Return True when the Council-boss selection UI is showing.
+
+        Trigger phrase: "做出你最终选择" — appears when the player is at the
+        boss-selection altar and must choose between 巴图克 and 堕落理事会.
+        Maps to SELECTING_BOSS_ENTRY.
+        """
+        if not quest_text:
+            quest_text = self.read_quest_tracker()
+        keywords = [
+            "做出你最终选择",    # full phrase
+            "最终选择",          # OCR may drop leading chars
+            "Make Your Final Choice", "Final Choice",
+        ]
+        return any(kw in quest_text for kw in keywords)
+
+    def check_boss_fight(self, quest_text: str = "") -> bool:
+        """Return True when the boss fight (Council / Barthuk) is in progress.
+
+        The quest objective switches to "击败堕落理事会" or "击败巴图克" once
+        the player enters the boss arena.
+        """
+        if not quest_text:
+            quest_text = self.read_quest_tracker()
+        keywords = [
+            "击败堕落理事会", "堕落理事会",
+            "击败巴图克", "巴图克",
+            "Defeat the Fell Council", "Fell Council",
+            "Defeat Bartuc", "Bartuc",
         ]
         return any(kw in quest_text for kw in keywords)
 
