@@ -1,0 +1,20 @@
+syntax = "proto2";
+
+package bgs.protocol;
+
+option java_package = "bgs.protocol";
+option java_outer_classname = "EntityProto";
+
+import "bgs/low/pb/client/global_extensions/field_options.proto";
+import "bgs/low/pb/client/global_extensions/message_options.proto";
+
+message EntityId {
+  optional fixed64 high = 1;
+  optional fixed64 low = 2;
+}
+
+message Identity {
+  optional .bgs.protocol.EntityId account_id = 1;
+  optional .bgs.protocol.EntityId game_account_id = 2;
+}
+

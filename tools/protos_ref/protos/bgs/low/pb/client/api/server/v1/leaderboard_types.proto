@@ -1,0 +1,60 @@
+syntax = "proto2";
+
+package bgs.protocol.leaderboard.v1.server;
+
+import "bgs/low/pb/client/api/common/v2/account_identity.proto";
+import "bgs/low/pb/client/rpc_types.proto";
+
+message Tag {
+  optional string name = 1;
+  optional string value = 2;
+}
+
+message TagSet {
+  optional string name = 1;
+  repeated string values = 2;
+}
+
+message Score {
+  optional string type = 1;
+  optional double value = 2;
+}
+
+message Rule {
+  optional uint32 title_id = 1;
+  optional string name = 2;
+  optional uint64 snapshot_duration_s = 3;
+  optional bool is_active = 4;
+  optional bool is_public = 5;
+  optional uint64 start_time_ms = 6;
+  optional uint64 end_time_ms = 7;
+  repeated string score_type_set = 8;
+  repeated .bgs.protocol.leaderboard.v1.server.TagSet tag_set = 9;
+  optional .bgs.protocol.leaderboard.v1.server.LeaderboardType leaderboard_type = 10;
+  optional .bgs.protocol.leaderboard.v1.server.LeaderboardSortOrder sort_order = 11;
+}
+
+message Rank {
+  optional .bgs.protocol.account.v2.Identity user = 1;
+  optional string leaderboard_id = 2;
+  optional string entity_id = 3;
+  optional string battle_tag = 4;
+  optional uint64 creation_time_ms = 5;
+  optional uint64 position = 6;
+  optional .bgs.protocol.leaderboard.v1.server.Score score = 7;
+  optional bytes payload = 8;
+  optional uint64 version = 9;
+}
+
+enum LeaderboardType {
+  LEADERBOARD_TYPE_MAX = 0;
+  LEADERBOARD_TYPE_MIN = 1;
+  LEADERBOARD_TYPE_LATEST = 2;
+  LEADERBOARD_TYPE_VERSIONED = 3;
+}
+
+enum LeaderboardSortOrder {
+  LEADERBOARD_SORT_ORDER_DESC = 0;
+  LEADERBOARD_SORT_ORDER_ASC = 1;
+}
+

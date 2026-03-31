@@ -1,0 +1,32 @@
+syntax = "proto2";
+
+package bgs.protocol.club.v1.client;
+
+import "bgs/low/pb/client/api/common/v1/club_type.proto";
+
+message NameGeneratorConfig {
+  repeated .bgs.protocol.club.v1.client.NameGenerator name_generators = 1;
+  optional .bgs.protocol.club.v1.client.NameGeneratorScorecard club_type_scorecard = 2;
+  optional .bgs.protocol.club.v1.client.NameGeneratorScorecard locale_scorecard = 3;
+}
+
+message NameGeneratorScorecard {
+  optional bool is_required = 1;
+  optional uint32 full_match = 2;
+  optional uint32 partial_match = 3;
+  optional uint32 partial_fallback = 4;
+  optional uint32 full_fallback = 5;
+}
+
+message NameGenerator {
+  repeated string names = 1;
+  repeated .bgs.protocol.club.v1.client.NameGeneratorReplacement replacements = 2;
+  repeated .bgs.protocol.club.v1.UniqueClubType club_types = 3;
+  repeated string locales = 4;
+}
+
+message NameGeneratorReplacement {
+  optional string id = 1;
+  repeated string options = 2;
+}
+

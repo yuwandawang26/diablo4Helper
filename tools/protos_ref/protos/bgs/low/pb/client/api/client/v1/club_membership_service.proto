@@ -1,0 +1,64 @@
+syntax = "proto2";
+
+package bgs.protocol.club_membership.v1.client;
+
+import "bgs/low/pb/client/api/client/v1/club_types.proto";
+import "bgs/low/pb/client/api/client/v1/club_stream.proto";
+
+service ClubMembershipService {
+  rpc Subscribe (.bgs.protocol.club_membership.v1.client.SubscribeRequest) returns (.bgs.protocol.club_membership.v1.client.SubscribeResponse) {}
+  rpc Unsubscribe (.bgs.protocol.club_membership.v1.client.UnsubscribeRequest) returns (.bgs.protocol.NoData) {}
+  rpc GetState (.bgs.protocol.club_membership.v1.client.GetStateRequest) returns (.bgs.protocol.club_membership.v1.client.GetStateResponse) {}
+  rpc UpdateClubSharedSettings (.bgs.protocol.club_membership.v1.client.UpdateClubSharedSettingsRequest) returns (.bgs.protocol.NoData) {}
+  rpc GetStreamMentions (.bgs.protocol.club_membership.v1.client.GetStreamMentionsRequest) returns (.bgs.protocol.club_membership.v1.client.GetStreamMentionsResponse) {}
+  rpc RemoveStreamMentions (.bgs.protocol.club_membership.v1.client.RemoveStreamMentionsRequest) returns (.bgs.protocol.NoData) {}
+  rpc AdvanceStreamMentionViewTime (.bgs.protocol.club_membership.v1.client.AdvanceStreamMentionViewTimeRequest) returns (.bgs.protocol.NoData) {}
+}
+
+message SubscribeRequest {
+  optional .bgs.protocol.account.v1.AccountId agent_id_deprecated = 1;
+  optional .bgs.protocol.club_membership.v1.client.ClubMembershipSubscribeOptions options = 2;
+}
+
+message SubscribeResponse {
+  optional .bgs.protocol.club_membership.v1.client.ClubMembershipState state = 1;
+}
+
+message UnsubscribeRequest {
+  optional .bgs.protocol.account.v1.AccountId agent_id_deprecated = 1;
+}
+
+message GetStateRequest {
+  optional .bgs.protocol.account.v1.AccountId agent_id_deprecated = 1;
+  optional .bgs.protocol.club_membership.v1.client.ClubMembershipGetStateOptions options = 2;
+}
+
+message GetStateResponse {
+  optional .bgs.protocol.club_membership.v1.client.ClubMembershipState state = 1;
+}
+
+message UpdateClubSharedSettingsRequest {
+  optional .bgs.protocol.account.v1.AccountId agent_id_deprecated = 1;
+  optional .bgs.protocol.club_membership.v1.client.ClubSharedSettingsOptions options = 2;
+}
+
+message GetStreamMentionsRequest {
+  optional .bgs.protocol.account.v1.AccountId agent_id_deprecated = 1;
+  optional .bgs.protocol.GetEventOptions options = 2;
+  optional bool fetch_messages = 3;
+}
+
+message GetStreamMentionsResponse {
+  repeated .bgs.protocol.club.v1.client.StreamMention mention = 1;
+  optional uint64 continuation = 2;
+}
+
+message RemoveStreamMentionsRequest {
+  optional .bgs.protocol.account.v1.AccountId agent_id_deprecated = 1;
+  repeated .bgs.protocol.TimeSeriesId mention_id = 2;
+}
+
+message AdvanceStreamMentionViewTimeRequest {
+  optional .bgs.protocol.account.v1.AccountId agent_id_deprecated = 1;
+}
+

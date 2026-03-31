@@ -1,0 +1,4 @@
+syntax = "proto2";
+
+import public "bgs/low/pb/client/api/common/v1/invitation_types.proto";
+

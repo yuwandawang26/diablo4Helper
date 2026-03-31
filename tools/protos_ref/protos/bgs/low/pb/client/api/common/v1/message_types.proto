@@ -1,0 +1,19 @@
+syntax = "proto2";
+
+package bgs.protocol;
+
+message MessageId {
+  optional uint64 epoch = 1;
+  optional uint64 position = 2;
+}
+
+enum TypingIndicator {
+  TYPING_START = 0;
+  TYPING_STOP = 1;
+}
+
+enum MessageOrigin {
+  MESSAGE_ORIGIN_PLAYER = 0;
+  MESSAGE_ORIGIN_SYSTEM = 1;
+}
+

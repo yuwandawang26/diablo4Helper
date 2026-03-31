@@ -1,0 +1,47 @@
+syntax = "proto2";
+
+package bgs.protocol.channel.v2.server;
+
+import public "bgs/low/pb/client/account_types.proto";
+import public "bgs/low/pb/client/api/client/v2/channel_enum.proto";
+import public "bgs/low/pb/client/api/client/v2/channel_types.proto";
+import public "bgs/low/pb/client/api/common/v2/attribute_types.proto";
+import "bgs/low/pb/client/rpc_types.proto";
+
+message CreateChannelServerOptions {
+  optional .bgs.protocol.channel.v2.client.UniqueChannelType type = 1;
+  optional string name = 2;
+  optional .bgs.protocol.channel.v2.client.PrivacyLevel privacy_level = 3;
+  repeated .bgs.protocol.v2.Attribute attribute = 4;
+  repeated .bgs.protocol.channel.v2.client.CreateMemberOptions member = 5;
+  optional string collection_id = 6;
+}
+
+message ChannelStateOptions {
+  repeated .bgs.protocol.v2.Attribute attribute = 1;
+  optional .bgs.protocol.channel.v2.client.PrivacyLevel privacy_level = 2;
+}
+
+message ChannelStateAssignment {
+  optional string name = 1;
+  repeated .bgs.protocol.v2.Attribute attribute = 2;
+  optional .bgs.protocol.channel.v2.client.PrivacyLevel privacy_level = 3;
+}
+
+message UpdateMemberStateOptions {
+  optional .bgs.protocol.account.v1.GameAccountHandle member_id_deprecated = 1;
+  repeated .bgs.protocol.v2.Attribute attribute = 2;
+  optional .bgs.protocol.account.v2.GameAccountHandle member_game_account = 3;
+}
+
+message MemberStateAssignment {
+  optional .bgs.protocol.account.v1.GameAccountHandle member_id_deprecated = 1;
+  repeated .bgs.protocol.v2.Attribute attribute = 2;
+  optional .bgs.protocol.account.v2.GameAccountHandle member_game_account = 3;
+}
+
+message ActiveChannelDescription {
+  optional .bgs.protocol.channel.v2.client.UniqueChannelType type = 1;
+  optional .bgs.protocol.channel.v2.ChannelId channel_id = 2;
+}
+

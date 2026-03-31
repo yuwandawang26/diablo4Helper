@@ -1,0 +1,42 @@
+syntax = "proto2";
+
+package bgs.protocol.game_utilities.v2.server;
+
+import "bgs/low/pb/client/rpc_types.proto";
+import "bgs/low/pb/client/api/common/v2/attribute_types.proto";
+import "bgs/low/pb/client/api/server/v2/game_utilities_service_types.proto";
+
+service GameUtilitiesListener {
+  rpc ProcessClientTask (.bgs.protocol.game_utilities.v2.server.ProcessClientTaskRequest) returns (.bgs.protocol.game_utilities.v2.server.ProcessClientTaskResponse) {}
+  rpc ProcessServerTask (.bgs.protocol.game_utilities.v2.server.ProcessServerTaskRequest) returns (.bgs.protocol.game_utilities.v2.server.ProcessServerTaskResponse) {}
+  rpc ProcessAdminTask (.bgs.protocol.game_utilities.v2.server.ProcessAdminTaskRequest) returns (.bgs.protocol.game_utilities.v2.server.ProcessAdminTaskResponse) {}
+}
+
+message ProcessAdminTaskRequest {
+  repeated .bgs.protocol.v2.Attribute attribute = 1;
+  repeated .bgs.protocol.v2.Attribute payload = 2;
+}
+
+message ProcessAdminTaskResponse {
+  repeated .bgs.protocol.v2.Attribute result = 1;
+}
+
+message ProcessClientTaskRequest {
+  repeated .bgs.protocol.v2.Attribute attribute = 1;
+  repeated .bgs.protocol.v2.Attribute payload = 2;
+  optional .bgs.protocol.game_utilities.v2.server.ClientInfo client_info = 3;
+}
+
+message ProcessClientTaskResponse {
+  repeated .bgs.protocol.v2.Attribute result = 1;
+}
+
+message ProcessServerTaskRequest {
+  repeated .bgs.protocol.v2.Attribute attribute = 1;
+  repeated .bgs.protocol.v2.Attribute payload = 2;
+}
+
+message ProcessServerTaskResponse {
+  repeated .bgs.protocol.v2.Attribute result = 1;
+}
+

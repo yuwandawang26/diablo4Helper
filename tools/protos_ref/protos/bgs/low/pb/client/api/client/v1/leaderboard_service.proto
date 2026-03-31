@@ -1,0 +1,79 @@
+syntax = "proto2";
+
+package bgs.protocol.leaderboard.v1.client;
+
+import "bgs/low/pb/client/api/client/v1/leaderboard_types.proto";
+import "bgs/low/pb/client/rpc_types.proto";
+
+service LeaderboardService {
+  rpc GetRanks (.bgs.protocol.leaderboard.v1.client.GetRanksRequest) returns (.bgs.protocol.leaderboard.v1.client.GetRanksResponse) {}
+  rpc GetRanksByPosition (.bgs.protocol.leaderboard.v1.client.GetRanksByPositionRequest) returns (.bgs.protocol.leaderboard.v1.client.GetRanksByPositionResponse) {}
+  rpc GetRanksByPositionRange (.bgs.protocol.leaderboard.v1.client.GetRanksByPositionRangeRequest) returns (.bgs.protocol.leaderboard.v1.client.GetRanksByPositionRangeResponse) {}
+  rpc GetRanksByEntityRange (.bgs.protocol.leaderboard.v1.client.GetRanksByEntityRangeRequest) returns (.bgs.protocol.leaderboard.v1.client.GetRanksByEntityRangeResponse) {}
+  rpc GetRanksByEntityIds (.bgs.protocol.leaderboard.v1.client.GetRanksByEntityIdsRequest) returns (.bgs.protocol.leaderboard.v1.client.GetRanksByEntityIdsResponse) {}
+  rpc GetRanksByClubId (.bgs.protocol.leaderboard.v1.client.GetRanksByClubIdRequest) returns (.bgs.protocol.leaderboard.v1.client.GetRanksByClubIdResponse) {}
+}
+
+message GetRanksRequest {
+  optional string leaderboard_id = 1;
+  optional uint64 continuation = 2;
+  optional uint32 count = 3 [default = 10];
+}
+
+message GetRanksResponse {
+  optional uint64 total_count = 1;
+  optional uint64 continuation = 2;
+  repeated .bgs.protocol.leaderboard.v1.client.Rank ranks = 3;
+}
+
+message GetRanksByPositionRequest {
+  optional string leaderboard_id = 1;
+  repeated uint64 positions = 2;
+}
+
+message GetRanksByPositionResponse {
+  repeated .bgs.protocol.leaderboard.v1.client.Rank ranks = 1;
+}
+
+message GetRanksByPositionRangeRequest {
+  optional string leaderboard_id = 1;
+  optional uint64 start_position = 2;
+  optional uint64 end_position = 3;
+}
+
+message GetRanksByPositionRangeResponse {
+  optional uint64 total_count = 1;
+  repeated .bgs.protocol.leaderboard.v1.client.Rank ranks = 2;
+}
+
+message GetRanksByEntityRangeRequest {
+  optional string leaderboard_id = 1;
+  optional string entity_id = 2;
+  optional uint32 ranks_above = 3;
+  optional uint32 ranks_below = 4;
+}
+
+message GetRanksByEntityRangeResponse {
+  repeated .bgs.protocol.leaderboard.v1.client.Rank ranks = 1;
+}
+
+message GetRanksByEntityIdsRequest {
+  optional string leaderboard_id = 1;
+  repeated string entity_ids = 2;
+}
+
+message GetRanksByEntityIdsResponse {
+  repeated .bgs.protocol.leaderboard.v1.client.Rank ranks = 1;
+}
+
+message GetRanksByClubIdRequest {
+  optional string leaderboard_id = 1;
+  optional uint64 club_id = 2;
+  optional uint64 continuation = 3;
+}
+
+message GetRanksByClubIdResponse {
+  repeated .bgs.protocol.leaderboard.v1.client.Rank ranks = 1;
+  optional uint64 continuation = 2;
+}
+

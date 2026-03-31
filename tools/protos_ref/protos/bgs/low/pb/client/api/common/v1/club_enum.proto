@@ -1,0 +1,22 @@
+syntax = "proto2";
+
+package bgs.protocol.club.v1;
+
+enum PrivacyLevel {
+  PRIVACY_LEVEL_CLOSED = 0;
+  PRIVACY_LEVEL_OPEN_INVITATION = 1;
+  PRIVACY_LEVEL_OPEN_TICKET = 2;
+  PRIVACY_LEVEL_OPEN = 3;
+}
+
+enum VisibilityLevel {
+  VISIBILITY_LEVEL_PRIVATE = 0;
+  VISIBILITY_LEVEL_PUBLIC = 1;
+}
+
+enum JoinClubSource {
+  JOIN_CLUB_SOURCE_NONE = 0;
+  JOIN_CLUB_SOURCE_CLUB_FINDER = 1;
+  JOIN_CLUB_SOURCE_CLUB_RECOMMENDATION = 2;
+}
+

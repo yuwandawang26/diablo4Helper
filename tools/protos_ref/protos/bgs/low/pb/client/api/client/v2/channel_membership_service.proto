@@ -1,0 +1,78 @@
+syntax = "proto2";
+
+package bgs.protocol.channel_membership.v2.client;
+
+import "bgs/low/pb/client/api/client/v2/channel_types.proto";
+import "bgs/low/pb/client/rpc_types.proto";
+import "bgs/low/pb/client/api/common/v1/invitation_types.proto";
+
+service ChannelMembershipService {
+  rpc Subscribe (.bgs.protocol.channel_membership.v2.client.SubscribeRequest) returns (.bgs.protocol.channel_membership.v2.client.SubscribeResponse) {}
+  rpc Unsubscribe (.bgs.protocol.channel_membership.v2.client.UnsubscribeRequest) returns (.bgs.protocol.NoData) {}
+  rpc GetState (.bgs.protocol.channel_membership.v2.client.GetStateRequest) returns (.bgs.protocol.channel_membership.v2.client.GetStateResponse) {}
+}
+
+service ChannelMembershipListener {
+  rpc OnChannelAdded (.bgs.protocol.channel_membership.v2.client.ChannelAddedNotification) returns (.bgs.protocol.NO_RESPONSE) {}
+  rpc OnChannelRemoved (.bgs.protocol.channel_membership.v2.client.ChannelRemovedNotification) returns (.bgs.protocol.NO_RESPONSE) {}
+  rpc OnReceivedInvitationAdded (.bgs.protocol.channel_membership.v2.client.ReceivedInvitationAddedNotification) returns (.bgs.protocol.NO_RESPONSE) {}
+  rpc OnReceivedInvitationRemoved (.bgs.protocol.channel_membership.v2.client.ReceivedInvitationRemovedNotification) returns (.bgs.protocol.NO_RESPONSE) {}
+}
+
+message SubscribeRequest {
+  optional .bgs.protocol.account.v1.GameAccountHandle agent_id_deprecated = 1;
+  optional .bgs.protocol.account.v2.GameAccountHandle agent_game_account = 2;
+}
+
+message SubscribeResponse {
+  optional .bgs.protocol.channel.v2.client.ChannelMembershipState state = 1;
+}
+
+message UnsubscribeRequest {
+  optional .bgs.protocol.account.v1.GameAccountHandle agent_id_deprecated = 1;
+  optional .bgs.protocol.account.v2.GameAccountHandle agent_game_account = 2;
+}
+
+message GetStateRequest {
+  optional .bgs.protocol.account.v1.GameAccountHandle agent_id_deprecated = 1;
+  optional .bgs.protocol.account.v2.GameAccountHandle agent_game_account = 2;
+}
+
+message GetStateResponse {
+  optional .bgs.protocol.channel.v2.client.ChannelMembershipState state = 1;
+}
+
+message ChannelAddedNotification {
+  optional .bgs.protocol.account.v1.GameAccountHandle agent_id_deprecated = 1;
+  optional .bgs.protocol.account.v1.GameAccountHandle subscriber_id_deprecated = 2;
+  optional .bgs.protocol.channel.v2.client.ChannelDescription membership = 3;
+  optional .bgs.protocol.account.v2.GameAccountHandle agent_game_account = 4;
+  optional .bgs.protocol.account.v2.GameAccountHandle subscriber_game_account = 5;
+}
+
+message ChannelRemovedNotification {
+  optional .bgs.protocol.account.v1.GameAccountHandle agent_id_deprecated = 1;
+  optional .bgs.protocol.account.v1.GameAccountHandle subscriber_id_deprecated = 2;
+  optional .bgs.protocol.channel.v2.ChannelId channel_id = 4;
+  optional .bgs.protocol.channel.v2.client.ChannelRemovedReason reason = 5;
+  optional .bgs.protocol.account.v2.GameAccountHandle agent_game_account = 6;
+  optional .bgs.protocol.account.v2.GameAccountHandle subscriber_game_account = 7;
+}
+
+message ReceivedInvitationAddedNotification {
+  optional .bgs.protocol.account.v1.GameAccountHandle agent_id_deprecated = 1;
+  optional .bgs.protocol.account.v1.GameAccountHandle subscriber_id_deprecated = 2;
+  optional .bgs.protocol.channel.v2.client.ChannelInvitation invitation = 3;
+  optional .bgs.protocol.account.v2.GameAccountHandle agent_game_account = 4;
+  optional .bgs.protocol.account.v2.GameAccountHandle subscriber_game_account = 5;
+}
+
+message ReceivedInvitationRemovedNotification {
+  optional .bgs.protocol.account.v1.GameAccountHandle agent_id_deprecated = 1;
+  optional .bgs.protocol.account.v1.GameAccountHandle subscriber_id_deprecated = 2;
+  optional fixed64 invitation_id = 3;
+  optional .bgs.protocol.InvitationRemovedReason reason = 4;
+  optional .bgs.protocol.account.v2.GameAccountHandle agent_game_account = 5;
+  optional .bgs.protocol.account.v2.GameAccountHandle subscriber_game_account = 6;
+}
+

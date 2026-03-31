@@ -1,0 +1,15 @@
+syntax = "proto2";
+
+package bgs.protocol.notification.v2.client;
+
+import "bgs/low/pb/client/rpc_types.proto";
+import "bgs/low/pb/client/api/client/v2/notification_types.proto";
+
+service NotificationListener {
+  rpc OnNotificationReceived (.bgs.protocol.notification.v2.client.NotificationReceivedNotification) returns (.bgs.protocol.NO_RESPONSE) {}
+}
+
+message NotificationReceivedNotification {
+  repeated .bgs.protocol.notification.v2.client.Notification notifications = 1;
+}
+

@@ -1,0 +1,24 @@
+syntax = "proto2";
+
+package bgs.protocol.leaderboard.v1.client;
+
+import "bgs/low/pb/client/api/common/v2/account_identity.proto";
+import "bgs/low/pb/client/rpc_types.proto";
+
+message Score {
+  optional string type = 1;
+  optional double value = 2;
+}
+
+message Rank {
+  optional .bgs.protocol.account.v2.Identity user = 1;
+  optional string leaderboard_id = 2;
+  optional string entity_id = 3;
+  optional string battle_tag = 4;
+  optional uint64 creation_time_ms = 5;
+  optional uint64 position = 6;
+  optional .bgs.protocol.leaderboard.v1.client.Score score = 7;
+  optional bytes payload = 8;
+  optional uint64 version = 9;
+}
+

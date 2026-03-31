@@ -1,0 +1,168 @@
+syntax = "proto2";
+
+package bgs.protocol.channel.v2.client;
+
+import public "bgs/low/pb/client/account_types.proto";
+import public "bgs/low/pb/client/rpc_types.proto";
+import public "bgs/low/pb/client/api/client/v2/channel_enum.proto";
+import public "bgs/low/pb/client/api/common/v1/channel_role_set.proto";
+import public "bgs/low/pb/client/api/common/v2/attribute_types.proto";
+import public "bgs/low/pb/client/api/common/v2/channel_id.proto";
+import public "bgs/low/pb/client/api/common/v2/game_account_handle.proto";
+
+message UniqueChannelType {
+  optional fixed32 program = 2;
+  optional string channel_type = 3;
+}
+
+message RoleAssignment {
+  optional .bgs.protocol.account.v1.GameAccountHandle member_id_deprecated = 1;
+  repeated uint32 role = 2;
+  optional .bgs.protocol.account.v2.GameAccountHandle member_game_account = 3;
+}
+
+message AttributeAssignment {
+  optional .bgs.protocol.account.v1.GameAccountHandle member_id_deprecated = 1;
+  repeated .bgs.protocol.v2.Attribute attribute = 2;
+  optional .bgs.protocol.account.v2.GameAccountHandle member_game_account = 3;
+}
+
+message CreateMemberOptions {
+  optional .bgs.protocol.account.v1.GameAccountHandle member_id_deprecated = 1;
+  repeated .bgs.protocol.v2.Attribute attribute = 3;
+  optional .bgs.protocol.account.v2.GameAccountHandle member_game_account = 4;
+}
+
+message Member {
+  optional .bgs.protocol.account.v1.GameAccountHandle id_deprecated = 1;
+  optional string battle_tag = 2;
+  optional string voice_id = 3;
+  repeated uint32 role = 4;
+  repeated .bgs.protocol.v2.Attribute attribute = 5;
+  optional uint64 account_id = 6;
+  optional .bgs.protocol.account.v2.GameAccountHandle game_account = 7;
+}
+
+message CreateChannelOptions {
+  optional .bgs.protocol.channel.v2.client.UniqueChannelType type = 1;
+  optional string name = 2;
+  optional .bgs.protocol.channel.v2.client.PrivacyLevel privacy_level = 3 [default = PRIVACY_LEVEL_OPEN];
+  repeated .bgs.protocol.v2.Attribute attribute = 4;
+  optional .bgs.protocol.channel.v2.client.CreateMemberOptions member = 5;
+}
+
+message PublicChannelType {
+  optional .bgs.protocol.channel.v2.client.UniqueChannelType type = 1;
+  optional string name = 2;
+  optional string identity = 3;
+}
+
+message GetPublicChannelTypesOptions {
+  optional .bgs.protocol.channel.v2.client.UniqueChannelType type = 1;
+}
+
+message FindChannelOptions {
+  optional .bgs.protocol.channel.v2.client.UniqueChannelType type = 1;
+  optional string identity = 2;
+  optional fixed32 locale = 3;
+  repeated .bgs.protocol.v2.Attribute search_attribute = 4;
+  repeated .bgs.protocol.account.v1.AccountId reservation_deprecated = 6;
+  repeated uint64 reservation_account_id = 7;
+}
+
+message SendMessageOptions {
+  optional string content = 4;
+  repeated .bgs.protocol.v2.Attribute attribute = 5;
+}
+
+message ChannelMessage {
+  optional .bgs.protocol.account.v1.GameAccountHandle author_id_deprecated = 1;
+  optional string content = 3;
+  repeated .bgs.protocol.v2.Attribute attribute = 4;
+  optional uint64 creation_time = 5;
+  optional .bgs.protocol.account.v2.GameAccountHandle author_game_account = 6;
+}
+
+message PublicChannelState {
+  optional string identity = 1;
+  optional fixed32 locale = 2;
+  repeated .bgs.protocol.v2.Attribute search_attribute = 3;
+  repeated .bgs.protocol.account.v1.AccountId reservation_deprecated = 6;
+  repeated uint64 reservation_account_id = 7;
+}
+
+message Channel {
+  optional .bgs.protocol.channel.v2.ChannelId id = 1;
+  optional .bgs.protocol.channel.v2.client.UniqueChannelType type = 2;
+  optional string name = 3;
+  optional .bgs.protocol.channel.v2.client.PrivacyLevel privacy_level = 4;
+  repeated .bgs.protocol.v2.Attribute attribute = 5;
+  repeated .bgs.protocol.channel.v2.client.Member member = 6;
+  repeated .bgs.protocol.channel.v2.client.ChannelInvitation invitation = 7;
+  optional .bgs.protocol.channel.ChannelRoleSet role_set = 8;
+  oneof state_type {
+    .bgs.protocol.channel.v2.client.PublicChannelState public_channel_state = 110;
+  }
+}
+
+message ChannelDescription {
+  optional .bgs.protocol.channel.v2.ChannelId id = 1;
+  optional .bgs.protocol.channel.v2.client.UniqueChannelType type = 2;
+  optional string name = 3;
+  optional .bgs.protocol.channel.v2.client.PrivacyLevel privacy_level = 4;
+  repeated .bgs.protocol.v2.Attribute attribute = 5;
+  optional uint32 member_count = 6;
+  oneof state_type {
+    .bgs.protocol.channel.v2.client.PublicChannelState public_channel_state = 110;
+  }
+}
+
+message ChannelMembershipState {
+  repeated .bgs.protocol.channel.v2.client.ChannelDescription description = 1;
+  repeated .bgs.protocol.channel.v2.client.ChannelInvitation invitation = 2;
+}
+
+message ChannelSlot {
+  optional bool reserved = 1;
+  optional bool rejoin = 2;
+}
+
+message SendInvitationOptions {
+  optional .bgs.protocol.channel.v2.ChannelId channel_id = 1;
+  optional .bgs.protocol.account.v1.GameAccountHandle target_id_deprecated = 2;
+  optional .bgs.protocol.channel.v2.client.ChannelSlot slot = 3;
+  optional .bgs.protocol.account.v2.GameAccountHandle target_game_account = 5;
+}
+
+message MemberDescription {
+  optional .bgs.protocol.account.v1.GameAccountHandle id_deprecated = 1;
+  optional string battle_tag = 2;
+  optional uint64 account_id = 3;
+  optional .bgs.protocol.account.v2.GameAccountHandle member_game_account = 4;
+}
+
+message ChannelInvitation {
+  optional fixed64 id = 1;
+  optional .bgs.protocol.channel.v2.client.MemberDescription inviter = 2;
+  optional .bgs.protocol.channel.v2.client.MemberDescription invitee = 3;
+  optional .bgs.protocol.channel.v2.client.ChannelDescription channel = 4;
+  optional .bgs.protocol.channel.v2.client.ChannelSlot slot = 5;
+  optional uint64 creation_time = 7;
+  optional uint64 expiration_time = 8;
+}
+
+message SendSuggestionOptions {
+  optional .bgs.protocol.channel.v2.ChannelId channel_id = 1;
+  optional .bgs.protocol.account.v1.GameAccountHandle target_id_deprecated = 2;
+  optional .bgs.protocol.account.v1.GameAccountHandle approval_id_deprecated = 3;
+  optional .bgs.protocol.account.v2.GameAccountHandle target_game_account = 6;
+  optional .bgs.protocol.account.v2.GameAccountHandle approval_game_account = 7;
+}
+
+message Suggestion {
+  optional .bgs.protocol.channel.v2.ChannelId channel_id = 2;
+  optional .bgs.protocol.channel.v2.client.MemberDescription suggester = 3;
+  optional .bgs.protocol.channel.v2.client.MemberDescription suggestee = 4;
+  optional uint64 creation_time = 7;
+}
+
